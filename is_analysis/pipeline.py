@@ -7,6 +7,7 @@ import pandas as pd
 import tifffile
 from scipy import stats
 
+from . import nuclei as nuclei_detection
 from . import plotting, rois, segmentation, synapse
 from .io import list_stacks, load_stack
 
@@ -29,8 +30,8 @@ def analyse_image(path, out, voxel_override=None, channels=(0, 1, 2), opts=None)
     stack = np.stack([stack[c] for c in channels])
     dapi, gfp, mcherry = stack
 
-    nuclei = segmentation.segment_nuclei(dapi, voxel, opts["min_nucleus_um3"],
-                                         opts["min_separation_um"])
+    nuclei = nuclei_detection.segment(dapi, voxel, opts["nuclei"], opts["min_nucleus_um3"],
+                                      opts["min_separation_um"], opts["nucleus_diameter_um"])
     classes = segmentation.classify(nuclei, gfp, voxel, opts["snr"], opts["gfp_fraction"])
     bodies, cores = segmentation.cell_bodies(nuclei, gfp, mcherry, dapi, voxel, opts["snr"],
                                              opts["open_um"], opts["expand_um"], opts["split"])
@@ -118,10 +119,15 @@ def main(argv=None):
                     help="GFP/mCherry positivity cut-off in robust SDs above background")
     ap.add_argument("--gfp-fraction", type=float, default=0.3,
                     help="GFP+ voxel fraction around a nucleus needed to call it a T cell")
+    ap.add_argument("--nuclei", choices=("cellpose", "watershed"), default="cellpose",
+                    help="nucleus detector: the Cellpose model (needs `pip install cellpose`) or "
+                         "a threshold plus distance watershed, which needs nothing extra")
+    ap.add_argument("--nucleus-diameter-um", type=float, default=nuclei_detection.DIAMETER_UM,
+                    help="typical nucleus diameter, used by --nuclei cellpose")
     ap.add_argument("--min-nucleus-um3", type=float, default=20.0, help="smallest accepted nucleus")
     ap.add_argument("--min-separation-um", type=float, default=4.0,
-                    help="smallest distance between two nuclear centres; raise it if one nucleus "
-                         "is split in two, lower it if two nuclei are merged")
+                    help="smallest distance between two nuclear centres (--nuclei watershed only);"
+                         " raise it if one nucleus is split in two, lower it if two are merged")
     ap.add_argument("--open-um", type=float, default=0.4,
                     help="isolated specks smaller than this are removed from the cell footprint")
     ap.add_argument("--split", choices=("shape", "nucleus"), default="shape",
@@ -146,7 +152,8 @@ def main(argv=None):
     channels = tuple(int(c) for c in a.channels.split(","))
     voxel = tuple(float(v) for v in a.voxel.split(",")) if a.voxel else None
     opts = {k: getattr(a, k) for k in
-            ("snr", "gfp_fraction", "min_nucleus_um3", "min_separation_um",
+            ("snr", "gfp_fraction", "min_nucleus_um3", "min_separation_um", "nuclei",
+             "nucleus_diameter_um",
              "expand_um", "min_area_um2", "shell_um", "border", "open_um", "split")}
 
     rows = []

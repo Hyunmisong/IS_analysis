@@ -1,8 +1,7 @@
 """3D nuclei segmentation, T cell / tumour cell classification and cell-body territories."""
 import numpy as np
 from scipy import ndimage as ndi
-from skimage.filters import gaussian, threshold_otsu
-from skimage.morphology import remove_small_objects
+from skimage.filters import gaussian
 from skimage.segmentation import expand_labels, watershed
 
 T_CELL, TUMOUR = "T", "Tumour"
@@ -54,38 +53,6 @@ def half_max(img, voxel, snr=3.0, sigma_um=0.3):
     if not inside.any():
         return inside
     return sm > 0.5 * (bg + np.median(sm[inside]))
-
-
-def segment_nuclei(dapi, voxel, min_volume_um3=20.0, min_sep_um=4.0, sigma_um=0.4):
-    """Label nuclei in 3D; touching nuclei are split by a distance-transform watershed."""
-    sm = smooth(dapi, voxel, sigma_um)
-    mask = sm > threshold_otsu(sm)
-    mask = ndi.binary_closing(mask, ball(0.5, voxel))
-    mask = ndi.binary_fill_holes(mask)
-    mask = remove_small_objects(mask, int(min_volume_um3 / np.prod(voxel)))
-    dist = ndi.distance_transform_edt(mask, sampling=voxel)
-    seeds = ndi.label(_peaks(smooth(dist, voxel, min_sep_um / 4), mask, voxel, min_sep_um))[0]
-    labels = watershed(-dist, seeds, mask=mask)
-    return _drop_small(labels, voxel, min_volume_um3)
-
-
-def _peaks(dist, mask, voxel, min_sep_um):
-    """One seed per local maximum of the distance map, maxima closer than min_sep_um merged.
-
-    The distance map is smoothed by min_sep_um / 4 first (see `segment_nuclei`): a large nucleus
-    has a lumpy map and would otherwise raise several maxima and be cut into pieces.
-    """
-    footprint = ball(min_sep_um / 2, voxel)
-    return mask & (dist >= ndi.maximum_filter(dist, footprint=footprint)) & (dist > 0)
-
-
-def _drop_small(labels, voxel, min_volume_um3):
-    keep = np.bincount(labels.ravel()) * np.prod(voxel) >= min_volume_um3
-    keep[0] = False
-    out = np.zeros_like(labels)
-    for new, old in enumerate(np.flatnonzero(keep), start=1):
-        out[labels == old] = new
-    return out
 
 
 def classify(nuclei, gfp, voxel, snr=3.0, gfp_fraction=0.3, shell_um=1.0):

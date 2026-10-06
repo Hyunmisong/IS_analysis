@@ -42,9 +42,13 @@ The pipeline also reads `.czi` directly, so the Fiji export step is optional.
 
 ```bash
 pip install -r requirements.txt
+pip install -r requirements-cellpose.txt   # nucleus detection; pulls in torch (CPU is enough)
 # put the *_stack.tif (or .czi) files in data/raw/, then
 python scripts/run_analysis.py --data-dir data/raw
 ```
+
+Cellpose is optional: `--nuclei watershed` falls back to a detector that needs nothing beyond
+scikit-image, at the cost of accuracy (see below).
 
 The image → condition mapping lives in [`metadata/samples.csv`](metadata/samples.csv); edit it for
 your own experiment. Without it (`--samples none`) the condition is taken from the part of the
@@ -59,7 +63,9 @@ Useful options:
 | `--voxel` | from file metadata | override `dz,dy,dx` in µm |
 | `--snr` | `3.0` | how many robust SDs above background a voxel must be to count as stained |
 | `--gfp-fraction` | `0.3` | GFP+ fraction around a nucleus needed to call it a T cell |
-| `--min-separation-um` | `4.0` | smallest distance between two nuclear centres. **The parameter to tune first**: raise it if one nucleus is cut in two, lower it if two nuclei are merged |
+| `--nuclei` | `cellpose` | nucleus detector: `cellpose` (needs the extra install) or `watershed` (no extra dependency, less accurate) |
+| `--nucleus-diameter-um` | `8.0` | typical nucleus diameter. **The parameter to tune first** for `--nuclei cellpose` |
+| `--min-separation-um` | `4.0` | smallest distance between two nuclear centres, `--nuclei watershed` only |
 | `--split` | `shape` | where the border between two touching cells goes: the waist of their shared footprint (`shape`) or half-way between their nuclei (`nucleus`) |
 | `--open-um` | `0.4` | isolated specks smaller than this are removed from the cell footprint |
 | `--expand-um` | `0.0` | extra growth of each cell territory; raise to `0.3` if real contacts are missed |
@@ -93,7 +99,7 @@ The same information is also written as label stacks in `results/masks/` (`_bodi
 | # | What happens | Where |
 |---|---|---|
 | 1 | **Collect and screen the files.** Glob `--pattern` over `--data-dir`, read each `.czi` / ImageJ `.tif` into a `[C, Z, Y, X]` array and take the voxel size from its metadata. Files with fewer than 4 z planes (overview tiles, single snapshots) are skipped, and `--channels` is checked against the file | [`io.py`](is_analysis/io.py) `list_stacks`, `load_stack`; [`pipeline.py`](is_analysis/pipeline.py) `analyse_image` |
-| 2 | **Find the nuclei (DAPI).** Gaussian smoothing → Otsu → closing → hole filling → objects below `--min-nucleus-um3` dropped. Touching nuclei are split by a watershed on the 3D distance map, with one seed per maximum at least `--min-separation-um` apart. Anisotropic voxels are handled throughout, so every distance is in µm, not in pixels | [`segmentation.py`](is_analysis/segmentation.py) `segment_nuclei` |
+| 2 | **Find the nuclei (DAPI).** The channel is smoothed by 1 µm — raw, it is too grainy for the model — and the Cellpose `nuclei` model is run plane by plane at `--nucleus-diameter-um`, then stitched in z. `--nuclei watershed` instead thresholds the channel and splits touching nuclei on the distance map | [`nuclei.py`](is_analysis/nuclei.py) `cellpose_nuclei`, `watershed_nuclei` |
 | 3 | **Decide what each nucleus is.** Fraction of GFP+ voxels in a 1 µm shell around it; above `--gfp-fraction` it is a T cell, otherwise a tumour cell | `segmentation.py` `classify` |
 | 4 | **Grow the nuclei into cell bodies.** The cell footprint is every channel at once — DAPI, GFP and mCherry at their **half-maximum** level (see below), each hole-filled on its own so that a hollow surface stain becomes a solid body, then combined. Two cells that touch share one blob, which is cut at its **waist** (watershed on the distance transform of the footprint, seeded by the nuclei) | `segmentation.py` `cell_bodies`, `half_max`, `fill` |
 | 5 | **Drop the cells that cannot be measured**: those clipped by the sides of the field. Cells clipped by the first or last z plane are kept and flagged `Clipped_Z` | `pipeline.py` `analyse_image`, `segmentation.clipped` |
@@ -312,10 +318,14 @@ image/dish as a random effect.
 - **Crowded fields are the hard case.** Where cells are packed, the border between two cells is
   drawn at the waist of their shared outline, not at a membrane, so both the cell shapes and the
   contact are only as good as that guess.
-- **Nucleus splitting is the parameter that matters most.** If `--min-separation-um` is too small
-  a large nucleus is cut in two, which splits the cell and reports one contact as several small
-  ones; too large and two neighbouring cells are merged and their contact disappears. Check
-  `segmentation_qc/` for cells with a line drawn through them.
+- **Everything rests on the nucleus detection**, because one seed per cell is what keeps two
+  cells apart. A missing seed makes a cell disappear into its neighbour and turns their contact
+  into a sliver; a duplicated one cuts a cell in half and reports one contact as several. Check
+  `segmentation_qc/` for cells with a line drawn through them, or for two cells inside one
+  outline, and tune `--nucleus-diameter-um`.
+- **The DAPI channel is grainy** at this photon count. Cellpose finds almost nothing on it raw
+  (5 nuclei in a field of ~25), which is why it is smoothed by 1 µm first. That smoothing is a
+  workaround for the acquisition, not a free parameter to be proud of.
 - The raw microscopy files are not tracked in git (~40 MB per image, see `.gitignore`). The
   **analysis output is**: `results/` in this repository is the complete output of the
   2026-06-04 run, so the figures, the ROIs and the table can be read without re-running anything.
