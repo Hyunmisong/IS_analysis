@@ -212,6 +212,15 @@ a line drawn through one cell.
 
 ---
 
+## Why there is a manual step
+
+Five attempts above failed for the same reason: the seeds are wrong, and nothing downstream can
+tell that two cells were detected as one. The bodies grown from *correct* seeds are good, so the
+cheapest reliable fix is to let a person place the seeds — one point per cell and its type — and
+leave everything else automatic. That is `tools/curate_seeds.ijm` and `--curation`, described in
+the README. It is not a workaround for a bug in the code; it is where the information the images
+no longer carry has to come from.
+
 ## What would actually fix this
 
 Not a parameter. The DAPI channel has to be smoothed by 1 µm before the nuclei can be detected at

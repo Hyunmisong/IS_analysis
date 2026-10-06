@@ -35,6 +35,7 @@ with one command when a parameter changes.
 | Convert the microscope files into the `*_stack.tif` hyperstacks | [`tools/export_stacks.ijm`](tools/export_stacks.ijm) (Fiji, Bio-Formats) |
 | Measure | `python scripts/run_analysis.py` |
 | **Look at what was found, on the original image** | [`tools/view_synapses.ijm`](tools/view_synapses.ijm) (Fiji) |
+| **Correct the cells by hand, then measure again** | [`tools/curate_seeds.ijm`](tools/curate_seeds.ijm) (Fiji) |
 
 The pipeline also reads `.czi` directly, so the Fiji export step is optional.
 
@@ -95,11 +96,44 @@ selecting one ROI in the Manager shows that one alone.
 The same information is also written as label stacks in `results/masks/` (`_bodies`, `_nuclei`,
 `_synapses`), which can be opened directly in Fiji if you prefer a mask over an outline.
 
+## Correcting the cells by hand
+
+The automatic detection gets the cell **bodies** right once it has the right seeds — on synthetic
+pairs the contact area lands within 3–40 % of the truth — and gets the **seeds** wrong in three
+ways that are easy to see and impossible to repair afterwards: one nucleus found twice, two
+nuclei found as one, or the wrong cell type. `docs/parameter-tuning.md` records five attempts to
+fix those automatically, all of which made the result worse.
+
+So the seeds, and only the seeds, can be set by hand: **one point per cell, plus what kind of
+cell it is.** Everything downstream stays automatic.
+
+```bash
+# 1. run normally; this also writes results/seeds/{image}.csv, the starting point
+python scripts/run_analysis.py --data-dir data/raw
+
+# 2. in Fiji: Plugins > Macros > Run... > tools/curate_seeds.ijm
+#    pick the image folder, the results folder, and curation/ to save into. It then walks
+#    through every image in turn - two rounds each, T cells then tumour cells: click to add
+#    a cell, alt-click to remove one. The plane does not matter: each point is placed at the
+#    brightest plane of its own DAPI column, so everything can be clicked on one slice.
+#    Each image is saved as its rounds finish, so Cancel stops for the day without losing
+#    anything; the next run skips what is already in curation/.
+
+# 3. measure again from the corrected points, into a separate folder
+python scripts/run_analysis.py --data-dir data/raw --curation curation --out results_curated
+```
+
+An image with no file in `curation/` is detected automatically as before, so the two can be
+mixed; the `Curated` column of the table says which rows came from hand-placed points. Keeping
+the output in `results_curated/` leaves the automatic run in `results/` intact, so the two can be
+compared and the repository keeps a record of what the program got wrong.
+
 ## The code, in the order it runs
 
 | # | What happens | Where |
 |---|---|---|
 | 1 | **Collect and screen the files.** Glob `--pattern` over `--data-dir`, read each `.czi` / ImageJ `.tif` into a `[C, Z, Y, X]` array and take the voxel size from its metadata. Files with fewer than 4 z planes (overview tiles, single snapshots) are skipped, and `--channels` is checked against the file | [`io.py`](is_analysis/io.py) `list_stacks`, `load_stack`; [`pipeline.py`](is_analysis/pipeline.py) `analyse_image` |
+| 1b | **Or take the cells from a curation file**, if `--curation` is given and the image has one: one point per cell with its type, each placed at the brightest plane of its own DAPI column. Steps 2 and 3 are then skipped | [`curation.py`](is_analysis/curation.py) `read_points`, `seeds` |
 | 2 | **Find the nuclei (DAPI).** The channel is smoothed by 1 µm — raw, it is too grainy for the model — and the Cellpose `nuclei` model is run plane by plane at `--nucleus-diameter-um`, then stitched in z. `--nuclei watershed` instead thresholds the channel and splits touching nuclei on the distance map | [`nuclei.py`](is_analysis/nuclei.py) `cellpose_nuclei`, `watershed_nuclei` |
 | 3 | **Decide what each nucleus is.** Fraction of GFP+ voxels in a 1 µm shell around it; above `--gfp-fraction` it is a T cell, otherwise a tumour cell | `segmentation.py` `classify` |
 | 4 | **Grow the nuclei into cell bodies.** The cell footprint is every channel at once — DAPI, GFP and mCherry at their **half-maximum** level (see below), each hole-filled on its own so that a hollow surface stain becomes a solid body, then combined. Two cells that touch share one blob, which is cut at its **waist** (watershed on the distance transform of the footprint, seeded by the nuclei) | `segmentation.py` `cell_bodies`, `half_max`, `fill` |
@@ -154,6 +188,7 @@ nothing. The *contact area* does not depend on the mCherry level, only on the se
 | `per_synapse/{image}_IS01.png` | the contact plane of one synapse: merge, mCherry, the two cell bodies, contact outlined in white |
 | `segmentation_qc/{image}.png` | projection with every cell outlined (cyan = T cell, yellow = tumour) and every synapse marked |
 | `rois/{image}.zip` | the same outlines as ImageJ ROIs, for `tools/view_synapses.ijm` |
+| `seeds/{image}.csv` | one point per detected cell with its type — the starting point for `tools/curate_seeds.ijm` |
 | `masks/{image}_bodies.tif`, `_nuclei.tif`, `_synapses.tif` | the label stacks, ImageJ-readable |
 | `group_stats.csv` | per condition: n, median, mean, Mann-Whitney p vs the control |
 | `synapse_size.png` | the final box plot |
@@ -175,6 +210,7 @@ nothing. The *contact area* does not depend on the mCherry level, only on the se
 | `mCherry_Enrichment` | their ratio; > 1 = antigen concentrated at the synapse |
 | `mCherry_Background`, `mCherry_SNR` | staining quality of that image |
 | `N_T_Cells`, `N_Tumour_Cells` | cells kept in that image, i.e. how crowded the field was |
+| `Curated` | the two cells came from hand-placed points rather than from automatic detection |
 | `Clipped_Z` | one of the two cells reaches the first or last z plane, so its volume and surface are truncated |
 
 **`Contact_Fraction_T` is usually the fairer comparison**: a bigger T cell makes a bigger contact

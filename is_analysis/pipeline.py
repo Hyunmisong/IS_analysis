@@ -8,7 +8,7 @@ import tifffile
 from scipy import stats
 
 from . import nuclei as nuclei_detection
-from . import plotting, rois, segmentation, synapse
+from . import curation, plotting, rois, segmentation, synapse
 from .io import list_stacks, load_stack
 
 KEY_METRIC = "Contact_Area_um2"
@@ -30,9 +30,16 @@ def analyse_image(path, out, voxel_override=None, channels=(0, 1, 2), opts=None)
     stack = np.stack([stack[c] for c in channels])
     dapi, gfp, mcherry = stack
 
-    nuclei = nuclei_detection.segment(dapi, voxel, opts["nuclei"], opts["min_nucleus_fraction"],
-                                      opts["min_separation_um"], opts["nucleus_diameter_um"])
-    classes = segmentation.classify(nuclei, gfp, voxel, opts["snr"], opts["gfp_fraction"])
+    curated = curation.file_for(opts["curation"], name)
+    if curated:
+        nuclei, classes = curation.seeds(curation.read_points(curated), dapi, voxel)
+    else:
+        nuclei = nuclei_detection.segment(dapi, voxel, opts["nuclei"],
+                                          opts["min_nucleus_fraction"],
+                                          opts["min_separation_um"],
+                                          opts["nucleus_diameter_um"])
+        classes = segmentation.classify(nuclei, gfp, voxel, opts["snr"], opts["gfp_fraction"])
+        curation.write_points(out / "seeds" / f"{name}.csv", nuclei, classes)
     bodies, cores = segmentation.cell_bodies(nuclei, gfp, mcherry, dapi, voxel, opts["snr"],
                                              opts["open_um"], opts["expand_um"], opts["split"])
     clipped_z = {}
@@ -51,13 +58,15 @@ def analyse_image(path, out, voxel_override=None, channels=(0, 1, 2), opts=None)
     for r in rows:
         r.update(Image=name, Voxel_Z_um=voxel[0], Voxel_XY_um=voxel[2],
                  N_T_Cells=n_t, N_Tumour_Cells=len(classes) - n_t,
-                 Clipped_Z=clipped_z[r["T_Cell"]] or clipped_z[r["Tumour_Cell"]])
+                 Clipped_Z=clipped_z[r["T_Cell"]] or clipped_z[r["Tumour_Cell"]],
+                 Curated=bool(curated))
 
     _write_masks(out / "masks", name, bodies, nuclei, synapses, voxel)
     rois.write(out / "rois" / f"{name}.zip", bodies, synapses, classes)
     plotting.plot_image_qc(
         out / "segmentation_qc" / f"{name}.png", stack, bodies, classes, rows, voxel,
-        f"{name}  |  T cells: {n_t}  tumour cells: {len(classes) - n_t}  synapses: {len(rows)}")
+        f"{name}  |  T cells: {n_t}  tumour cells: {len(classes) - n_t}  synapses: {len(rows)}"
+        + ("  |  hand-curated seeds" if curated else ""))
     for r in rows:
         plotting.plot_synapse(
             out / "per_synapse" / f"{name}_IS{r['IS']:02d}.png", stack, bodies, r, voxel,
@@ -141,6 +150,10 @@ def main(argv=None):
                     help="contacts smaller than this are not counted as a synapse")
     ap.add_argument("--shell-um", type=float, default=0.5,
                     help="half-thickness of the shell used for the mCherry readout")
+    ap.add_argument("--curation", default="",
+                    help="folder of hand-made {image}.csv seed files (x,y,type). An image with "
+                         "one is segmented from those points instead of by nucleus detection; "
+                         "the rest are detected automatically as usual")
     ap.add_argument("--border", choices=("xy", "zyx", "none"), default="xy",
                     help="drop cells clipped by the sides of the field (xy), by any edge "
                          "including the first/last z plane (zyx), or keep everything (none)")
@@ -156,7 +169,7 @@ def main(argv=None):
     opts = {k: getattr(a, k) for k in
             ("snr", "gfp_fraction", "min_nucleus_fraction", "min_separation_um", "nuclei",
              "nucleus_diameter_um",
-             "expand_um", "min_area_um2", "shell_um", "border", "open_um", "split")}
+             "expand_um", "min_area_um2", "shell_um", "border", "open_um", "split", "curation")}
 
     rows = []
     for path in files:
@@ -169,7 +182,7 @@ def main(argv=None):
                          "then try a lower --gfp-fraction or --snr, or --expand-um 0.3")
 
     df = _conditions(pd.DataFrame(rows), a.samples)
-    front = ["Image", "Condition", "IS", "T_Cell", "Tumour_Cell", KEY_METRIC, "Contact_Diameter_um",
+    front = ["Image", "Condition", "IS", "Curated", "T_Cell", "Tumour_Cell", KEY_METRIC, "Contact_Diameter_um",
              "Contact_Fraction_T", "mCherry_Enrichment"]
     df = df[front + [c for c in df.columns if c not in front]]
     df.to_csv(out / "synapse_table.csv", index=False)
