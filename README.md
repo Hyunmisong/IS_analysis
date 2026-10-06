@@ -65,6 +65,7 @@ Useful options:
 | `--gfp-fraction` | `0.3` | GFP+ fraction around a nucleus needed to call it a T cell |
 | `--nuclei` | `cellpose` | nucleus detector: `cellpose` (needs the extra install) or `watershed` (no extra dependency, less accurate) |
 | `--nucleus-diameter-um` | `8.0` | typical nucleus diameter. **The parameter to tune first** for `--nuclei cellpose` |
+| `--min-nucleus-fraction` | `0.075` | smallest nucleus kept, as a fraction of the volume of a sphere of `--nucleus-diameter-um`. A floor against single specks of noise; raising it to a real cut-off costs whole cells (see below) |
 | `--min-separation-um` | `4.0` | smallest distance between two nuclear centres, `--nuclei watershed` only |
 | `--split` | `shape` | where the border between two touching cells goes: the waist of their shared footprint (`shape`) or half-way between their nuclei (`nucleus`) |
 | `--open-um` | `0.4` | isolated specks smaller than this are removed from the cell footprint |
@@ -255,6 +256,9 @@ What to do before the next imaging session:
   the median tumour-surface intensity with the median background. Aim for the stained surface at
   **≥ 5× the background SD** — the pipeline reports exactly this number as `mCherry_SNR`, so it
   can be checked on a single test image before committing to a full session;
+- raise the **DAPI** exposure in the same pass. The nuclei are currently so grainy that they have
+  to be smoothed before they can be detected at all, and their measured sizes are not reliable
+  enough to tell a dead cell from a well-segmented one;
 - if that is not reached, titrate the primary antibody and improve the blocking and washing before
   reaching for more laser power — the background here is diffuse antibody, not detector noise, so
   more gain raises signal and background together and `mCherry_SNR` does not improve;
@@ -323,9 +327,22 @@ image/dish as a random effect.
   into a sliver; a duplicated one cuts a cell in half and reports one contact as several. Check
   `segmentation_qc/` for cells with a line drawn through them, or for two cells inside one
   outline, and tune `--nucleus-diameter-um`.
-- **The DAPI channel is grainy** at this photon count. Cellpose finds almost nothing on it raw
-  (5 nuclei in a field of ~25), which is why it is smoothed by 1 µm first. That smoothing is a
-  workaround for the acquisition, not a free parameter to be proud of.
+- **Undersized nuclei cannot be filtered out here.** A fifth of the detections come out below
+  20 % of the expected nucleus volume, and it is tempting to drop them as debris or dead cells.
+  Checked one by one they are not: some are nuclei Cellpose drew a little small, and the rest
+  are cells sitting above or below another cell — their outlines overlap in x and y but they are
+  five to nine planes apart in z. Dropping them cost 7 of 60 synapses and *raised* the largest
+  contact from 194 to 263 µm², because a cell whose only seed is gone has no marker left and the
+  watershed hands its body to its neighbour. `--min-nucleus-fraction` is therefore left at a
+  noise floor. A brighter DAPI exposure would make the nucleus sizes trustworthy enough for a
+  real cut-off.
+- **The DAPI channel is smoothed by 1 µm before Cellpose sees it.** At this photon count the raw
+  channel is grainy enough that the model finds almost nothing on it — 5 nuclei in a field of
+  about 25. Smoothing makes the nuclei recognisable, but it also blurs their real edges, so the
+  nucleus masks come out slightly small and round. That does not affect the contact areas, which
+  are measured on the cell bodies and not on the nuclei, but it does mean the nucleus shapes in
+  `masks/*_nuclei.tif` should not be used as a measurement. A brighter DAPI exposure would remove
+  the need for the smoothing.
 - The raw microscopy files are not tracked in git (~40 MB per image, see `.gitignore`). The
   **analysis output is**: `results/` in this repository is the complete output of the
   2026-06-04 run, so the figures, the ROIs and the table can be read without re-running anything.
