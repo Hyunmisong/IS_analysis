@@ -1,7 +1,11 @@
 image,condition
-1-1_stack,No T cell (control)
-1-2_stack,No T cell (control)
-2-1_stack,BCMA-positive
-2-2_stack,BCMA-positive
-3-1_stack,BCMA-negative
-3-2_stack,BCMA-negative
+1_stack,No T cell,Tumor cell,w/o anti-BCMA
+2_stack,T cell,Tumor cell,anti-BCMA
+3_stack,T cell,Tumor cell,w/o anti-BCMA
+4_stack,T cell,Tumor cell,anti-BCMA
+5_stack,T cell,Tumor cell,anti-BCMA
+6_stack,T cell,Tumor cell,anti-BCMA
+
+## T cell = NFAT-Jurkatcell-CAR_transfected
+## Tumor cell = Raji cell_BCMA expression verified with FACS
+
