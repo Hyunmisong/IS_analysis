@@ -108,11 +108,15 @@ def _crop(bodies, a, b, pad=2):
 
 
 def measure(stack, nuclei, bodies, cores, classes, voxel, min_area_um2=0.5, shell_um=0.5):
-    """One row per T cell / tumour cell contact, largest contact first."""
+    """(rows, synapse label image): one row per T cell / tumour cell contact, largest first.
+
+    The label image carries the contact voxels of synapse *i* under the value *i*, i.e. the same
+    numbering as the `IS` column and the per-synapse figures, so it can be overlaid in Fiji.
+    """
     dapi, gfp, mcherry = stack
     bg, bg_sd = background(mcherry, cores, voxel)
     volume = float(np.prod(voxel))
-    rows = []
+    found = []
     for (a, b), staircase in contact_pairs(bodies, voxel).items():
         kinds = {classes[a][0]: a, classes[b][0]: b}
         if len(kinds) != 2:  # T-T or tumour-tumour contact: not a synapse
@@ -126,7 +130,7 @@ def measure(stack, nuclei, bodies, cores, classes, voxel, min_area_um2=0.5, shel
         if not (area >= min_area_um2):
             continue
         length, width = extents_um(contact, voxel)
-        rows.append(dict(
+        found.append((sl, contact, dict(
             T_Cell=t, Tumour_Cell=tumour,
             Contact_Area_um2=area,
             Contact_Area_Voxelface_um2=staircase,
@@ -140,5 +144,11 @@ def measure(stack, nuclei, bodies, cores, classes, voxel, min_area_um2=0.5, shel
             DAPI_T=float(sub_dapi[sub_nuc == t].mean()) if (sub_nuc == t).any() else float("nan"),
             Z_Contact=float(np.argwhere(contact)[:, 0].mean()) + sl[0].start,
             **antigen_at_synapse(sub_mch, sub_core, tumour, contact, voxel, bg, bg_sd, shell_um),
-        ))
-    return sorted(rows, key=lambda r: -r["Contact_Area_um2"])
+        )))
+    found.sort(key=lambda f: -f[2]["Contact_Area_um2"])
+    synapses = np.zeros(bodies.shape, np.uint16)
+    rows = []
+    for index, (sl, contact, row) in enumerate(found, start=1):
+        synapses[sl][contact] = index
+        rows.append(dict(IS=index, **row))
+    return rows, synapses

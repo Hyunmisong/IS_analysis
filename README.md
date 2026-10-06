@@ -12,6 +12,13 @@ sits in it.
 
 ![example synapse](docs/example_synapse.png)
 
+> **Status.** This is a record of a method that was built and tested, not a finished study. The
+> only images it has been run on (2026-06-04, see below) are replicates of a single condition —
+> the comparison groups were never acquired, and the project ended before they could be. The
+> statistics code is there and works, but nothing in this repository is a biological result.
+> What is worth keeping is the measurement itself, its validation on synthetic data, and the
+> list of things to fix in the next acquisition (bottom of this file).
+
 ## Why Python and not an ImageJ macro
 
 The measurement is a **3D** one: splitting touching nuclei, growing each nucleus into a cell body,
@@ -27,10 +34,9 @@ with one command when a parameter changes.
 |---|---|
 | Convert the microscope files into the `*_stack.tif` hyperstacks | [`tools/export_stacks.ijm`](tools/export_stacks.ijm) (Fiji, Bio-Formats) |
 | Measure | `python scripts/run_analysis.py` |
-| Look at the segmentation plane by plane | [`tools/check_masks.ijm`](tools/check_masks.ijm) (Fiji) |
+| **Look at what was found, on the original image** | [`tools/view_synapses.ijm`](tools/view_synapses.ijm) (Fiji) |
 
 The pipeline also reads `.czi` directly, so the Fiji export step is optional.
-Every mask it produces is written as an ImageJ-readable 16-bit stack in `results/masks/`.
 
 ## Usage
 
@@ -60,38 +66,40 @@ Useful options:
 | `--metric` | `Contact_Area_um2` | which column is plotted and tested |
 | `--control` | first condition | reference group of the statistics |
 
-## Running the 2026-06-04 co-culture set
+## Seeing the result in Fiji
 
-That acquisition stores the channels as **R-PE (mCherry), EGFP, DAPI**, so the channel order has
-to be given explicitly, and the `1_stack*` files have no GFP channel at all (DAPI, mCherry, ESID)
-and must be left out:
+Run [`tools/view_synapses.ijm`](tools/view_synapses.ijm), point it at the analysed image and at
+the `results` folder. It opens the image and loads `results/rois/{image}.zip` into the ROI
+Manager, so the outlines are drawn on the raw data:
 
-```bash
-python scripts/run_analysis.py   --data-dir "<.../20260604/63x>" --pattern "[456]_stack*" --channels 2,1,0 --samples none
-```
-
-The `5_stack.czi` / `5_stack1.czi` overview tiles are single planes and are skipped automatically.
-The stacks are 13-21 planes at dz = 1 µm, i.e. barely deeper than one cell, so essentially every
-cell is flagged `Clipped_Z` - see the note on borders below.
-
-## Pipeline
-
-| Step | What it does | Code |
+| colour | ROI name | what it is |
 |---|---|---|
-| 1 | Load the stack (`.czi` or ImageJ `.tif`), read the voxel size from the metadata | `io.py` |
-| 2 | **Nuclei (DAPI)**: Gaussian smoothing → Otsu → hole filling → touching nuclei split by a watershed on the 3D distance map (anisotropic voxels handled throughout) | `segmentation.py` |
-| 3 | **Classify**: fraction of GFP+ voxels in a 1 µm shell around each nucleus → T cell or tumour cell | `segmentation.py` |
-| 4 | **Cell bodies**: the T cell body is the GFP+ volume, the tumour body is the filled mCherry+ surface; each type is split among its own nuclei. Voxels claimed by both channels go to the nearer nucleus | `segmentation.py` |
-| 5 | **Contacts**: every pair of touching bodies; T–T and tumour–tumour pairs are discarded | `synapse.py` |
-| 6 | **Size**: the contact area from a marching-cubes mesh of the T cell, taking the triangles that face the tumour cell | `synapse.py` |
-| 7 | **Antigen**: mCherry in a ±0.5 µm band on the tumour surface, at the synapse vs. over the rest of that surface, both background-subtracted | `synapse.py` |
-| 8 | Per-image and per-synapse figures, pooled table, group statistics, final plot | `plotting.py`, `pipeline.py` |
+| cyan | `z07_T3` | body of T cell 3, in plane 7 |
+| yellow | `z07_Tumour12` | body of tumour cell 12, in plane 7 |
+| white | `z07_IS01` | the contact of synapse 1 — **exactly the voxels whose area was measured** |
 
-Cells clipped by the **sides** of the field are dropped, since their volume and surface are not
-measurable. Cells clipped by the **first or last z plane** are kept but flagged in the `Clipped_Z`
-column: a stack only a little deeper than a cell clips most cells in z, so dropping them would
-throw away the experiment. Their volume and surface are underestimated, so filter on `Clipped_Z`
-before reading `Contact_Fraction_T` or the volumes. `--border zyx` drops them instead.
+The numbers match the `T_Cell`, `Tumour_Cell` and `IS` columns of `results/synapse_table.csv` and
+the filenames in `results/per_synapse/`, so a row in the table, a figure and an outline on the
+image all refer to the same object. Scrolling through z shows only the ROIs of the current plane;
+selecting one ROI in the Manager shows that one alone.
+
+The same information is also written as label stacks in `results/masks/` (`_bodies`, `_nuclei`,
+`_synapses`), which can be opened directly in Fiji if you prefer a mask over an outline.
+
+## The code, in the order it runs
+
+| # | What happens | Where |
+|---|---|---|
+| 1 | **Collect and screen the files.** Glob `--pattern` over `--data-dir`, read each `.czi` / ImageJ `.tif` into a `[C, Z, Y, X]` array and take the voxel size from its metadata. Files with fewer than 4 z planes (overview tiles, single snapshots) are skipped, and `--channels` is checked against the file | [`io.py`](is_analysis/io.py) `list_stacks`, `load_stack`; [`pipeline.py`](is_analysis/pipeline.py) `analyse_image` |
+| 2 | **Find the nuclei (DAPI).** Gaussian smoothing → Otsu → closing → hole filling → objects below `--min-nucleus-um3` dropped. Touching nuclei are split by a watershed on the 3D distance map, with one seed per maximum at least `--min-separation-um` apart. Anisotropic voxels are handled throughout, so every distance is in µm, not in pixels | [`segmentation.py`](is_analysis/segmentation.py) `segment_nuclei` |
+| 3 | **Decide what each nucleus is.** Fraction of GFP+ voxels in a 1 µm shell around it; above `--gfp-fraction` it is a T cell, otherwise a tumour cell | `segmentation.py` `classify` |
+| 4 | **Grow the nuclei into cell bodies**, each from the channel that marks it: the T cell body is the GFP+ volume, the tumour body is the filled mCherry+ surface. Each type is split among its own nuclei (nearest-nucleus watershed), and voxels claimed by both channels go to the nearer nucleus. Boundaries are put at the **half-maximum** level, not at background + 3 SD (see below) | `segmentation.py` `cell_bodies`, `half_max`, `fill` |
+| 5 | **Drop the cells that cannot be measured**: those clipped by the sides of the field. Cells clipped by the first or last z plane are kept and flagged `Clipped_Z` | `pipeline.py` `analyse_image`, `segmentation.clipped` |
+| 6 | **Find the contacts.** One pass over the three face directions gives every pair of touching bodies and a first area estimate; T–T and tumour–tumour pairs are discarded | [`synapse.py`](is_analysis/synapse.py) `contact_pairs`, `interface_mask` |
+| 7 | **Measure each synapse.** Area from a marching-cubes mesh of the T cell, taking the triangles that face the tumour cell; plus the contact extents, the cell volumes and surfaces | `synapse.py` `contact_area_mesh`, `surface_area`, `extents_um` |
+| 8 | **Measure the antigen.** mCherry in a ±0.5 µm band on the tumour surface, at the synapse vs. over the rest of that surface, both background-subtracted | `synapse.py` `antigen_at_synapse`, `segmentation.background` |
+| 9 | **Write the per-image output**: label stacks, ImageJ ROIs, the QC projection and one figure per synapse | `pipeline.py` `_write_masks`; [`rois.py`](is_analysis/rois.py) `write`; [`plotting.py`](is_analysis/plotting.py) `plot_image_qc`, `plot_synapse` |
+| 10 | **Pool everything**: attach the conditions, write the table, run the group statistics and the final plot | `pipeline.py` `_conditions`, `group_stats`, `plotting.plot_groups` |
 
 ### Where the boundary of a cell is put
 
@@ -100,6 +108,14 @@ hundred nm *outside* the real boundary and inflates every cell. The body masks t
 **half-maximum level** — half-way between the background and the stained signal — which is where a
 blurred step actually crosses its own mid-point. On the synthetic test below this brings the cell
 volumes to within 10 % of the truth instead of ~80 % too large.
+
+### Cells clipped in z
+
+Cells clipped by the **sides** of the field are dropped, since their volume and surface are not
+measurable. Cells clipped by the **first or last z plane** are kept but flagged in the `Clipped_Z`
+column: a stack only a little deeper than a cell clips most cells in z, so dropping them would
+throw away the experiment. Their volume and surface are underestimated, so filter on `Clipped_Z`
+before reading `Contact_Fraction_T` or the volumes. `--border zyx` drops them instead.
 
 ### Background
 
@@ -116,7 +132,8 @@ nothing. The *contact area* does not depend on the mCherry level, only on the se
 | `synapse_table.csv` / `.xlsx` | **one row per T cell – tumour cell contact**, pooled over all images |
 | `per_synapse/{image}_IS01.png` | the contact plane of one synapse: merge, mCherry, the two cell bodies, contact outlined in white |
 | `segmentation_qc/{image}.png` | projection with every cell outlined (cyan = T cell, yellow = tumour) and every synapse marked |
-| `masks/{image}_bodies.tif`, `_nuclei.tif` | the label images, ImageJ-readable, for checking in Fiji |
+| `rois/{image}.zip` | the same outlines as ImageJ ROIs, for `tools/view_synapses.ijm` |
+| `masks/{image}_bodies.tif`, `_nuclei.tif`, `_synapses.tif` | the label stacks, ImageJ-readable |
 | `group_stats.csv` | per condition: n, median, mean, Mann-Whitney p vs the control |
 | `synapse_size.png` | the final box plot |
 
@@ -126,6 +143,7 @@ nothing. The *contact area* does not depend on the mCherry level, only on the se
 
 | Column | Meaning |
 |---|---|
+| `IS` | synapse number within the image — the same number as the ROI and the figure |
 | `Contact_Area_um2` | **the IS size**: area of the shared surface, from the marching-cubes mesh |
 | `Contact_Diameter_um` | diameter of a circle of that area (`2·√(A/π)`) |
 | `Contact_Length_um`, `Contact_Width_um` | the two largest principal extents of the contact patch |
@@ -163,10 +181,94 @@ Cell volumes come out within ~10 % (T cell 268 µm³ true, 256–267 measured; t
 So: **`Contact_Area_um2` is systematically 10–40 % too large in absolute terms** — the segmented
 boundary cannot be more precise than the point spread function, and a contact is the small
 difference between two large surfaces. The ranking between conditions is preserved, which is what
-the comparison needs. `Contact_Length_um` tracks the true contact diameter to within ~0.5 µm and
-is the least biased single number here.
+a comparison needs. `Contact_Length_um` tracks the true contact diameter to within ~0.5 µm and is
+the least biased single number here.
 
 Run `python scripts/validate.py` after changing anything in `is_analysis/`.
+
+## What was run: the 2026-06-04 co-culture set
+
+All of these are **replicates of one condition**; there is no comparison group. The run exists to
+show the pipeline end to end, not to support a conclusion.
+
+That acquisition stores the channels as **R-PE (mCherry), EGFP, DAPI**, so the channel order has
+to be given explicitly, and the `1_stack*` files have no GFP channel at all (DAPI, mCherry, ESID)
+and must be left out:
+
+```bash
+python scripts/run_analysis.py \
+  --data-dir "<.../20260604/63x>" --pattern "[456]_stack*" --channels 2,1,0 --samples none
+```
+
+The `5_stack.czi` / `5_stack1.czi` overview tiles are single planes and are skipped automatically.
+16 stacks gave 81 contacts, median `Contact_Area_um2` ≈ 47 µm² with a very wide spread
+(IQR 16–140 µm²). The three things that spread comes from are the next section.
+
+## Next experiments
+
+### 1. Acquire deeper stacks with a finer z step
+
+The 2026-06-04 stacks are 13–21 planes at dz = 1 µm, i.e. 13–21 µm of depth for cells that are
+10–15 µm across, so **every single cell was flagged `Clipped_Z`**. A truncated cell has a
+truncated surface and a truncated contact, which makes `T_Volume_um3` and `Contact_Fraction_T`
+unusable and leaves the contact area dependent on where the stack happened to start.
+
+Next time:
+
+- start the stack ~5 µm below the lowest cell and end ~5 µm above the highest, so whole cells fit;
+- **dz ≤ 0.4 µm** at 63×. The Nyquist step for a 1.4 NA objective is ~0.3 µm, and the antibody rim
+  on the tumour surface is only ~0.8 µm thick, so 1 µm barely samples it;
+- keep dz identical across every condition that will be compared — the measured area depends on it;
+- then check that `Clipped_Z` is `False` for most rows. That is the one-line test that this is fixed.
+
+### 2. Get the mCherry (BCMA) staining above background
+
+`mCherry_SNR` had a median of ~1.7 across the run, and in some fields (e.g. `4_stack1`) the
+mCherry channel was essentially empty, so no tumour cell was detected at all and the field
+contributed nothing. At that level `mCherry_Enrichment` is noise, and the tumour body falls back
+to a 1.5 µm shell around the nucleus, which also distorts the contact area.
+
+What to do before the next imaging session:
+
+- image a **stained and an unstained (secondary-only) well with identical settings**, and compare
+  the median tumour-surface intensity with the median background. Aim for the stained surface at
+  **≥ 5× the background SD** — the pipeline reports exactly this number as `mCherry_SNR`, so it
+  can be checked on a single test image before committing to a full session;
+- if that is not reached, titrate the primary antibody and improve the blocking and washing before
+  reaching for more laser power — the background here is diffuse antibody, not detector noise, so
+  more gain raises signal and background together and `mCherry_SNR` does not improve;
+- include a **BCMA-negative tumour line** in the same session. It gives the true floor of
+  `mCherry_IS`, which is what the enrichment ratio should be judged against;
+- if the antigen stays dim, add a general membrane or cytoplasmic stain for the tumour cells. The
+  tumour body would then no longer depend on the antigen channel at all, which is the single
+  biggest structural weakness of the current segmentation.
+
+### 3. Separate a real synapse from two cells that merely touch
+
+The pipeline currently calls **every** T cell / tumour cell contact a synapse. In the run, about
+15 % of rows had `Contact_Fraction_T > 0.25` — cells interlocked in a clump, where the measured
+"contact" is a long irregular boundary set by the watershed rather than by a membrane, and where
+the area runs to several hundred µm². Dropping those moves the median from 47 to 40 µm². The rest
+of the distribution still mixes focal contacts with incidental apposition.
+
+Ideas, roughly in order of effort:
+
+- **a size/shape filter.** Exclude rows above a `Contact_Fraction_T` cut-off and below
+  `--min-area-um2`, and check the excluded ones in `per_synapse/` before fixing the threshold. The
+  quickest version: add a `--max-fraction-t` option and report how many rows it removes;
+- **a compactness criterion.** A mature synapse is a flat, roughly circular patch, so
+  `Contact_Length_um / Contact_Width_um` near 1 and `Contact_Area_um2` close to
+  `π·(Contact_Length_um/2)²`. An interlocking clump fails both. Those columns already exist — the
+  ratio just needs to be computed and looked at;
+- **a molecular criterion**, which is the one that actually defines a synapse. Stain for F-actin
+  (phalloidin) or phospho-tyrosine, or a CAR-clustering readout, and require enrichment at the
+  contact. The `antigen_at_synapse` function already measures exactly this for mCherry, so a
+  fourth channel can reuse it as is;
+- **a time course.** A conjugate that persists over minutes is a synapse; a chance apposition is
+  not. This needs live imaging rather than fixed stacks, and would be a different pipeline.
+
+Until one of these is in, read `Contact_Area_um2` as "how much of these two cells is in contact",
+not as "synapse size".
 
 ## Statistical caveat: the p-values are overestimated
 
@@ -185,15 +287,13 @@ image/dish as a random effect.
 - **Only contacts that are in the stack are found.** A cell clipped by the side of the field is
   dropped, so synapses at the edge are missed and n is smaller than what the eye counts.
   Cells clipped in z are kept but their volume and surface are truncated (`Clipped_Z`).
-- **z resolution.** A 1 µm z step still worked on the synthetic data, but it under-samples the
-  ~0.8 µm antigen rim; dz ≤ 0.4 µm is strongly preferred at 63×, and the same dz must be used for
-  all conditions that are compared.
-- **A contact is not proof of a synapse.** Two cells can touch by chance, and a real IS has
-  molecular polarisation this pipeline does not test. The small contacts in particular (close to
-  `--min-area-um2`) are better read as "cells in contact" than as mature synapses.
 - **Tumour bodies depend on the mCherry stain.** Where the antibody signal is weak the tumour body
   falls back to a 1.5 µm shell around the nucleus and its contact is then underestimated. Check
   `mCherry_SNR` and the figures in `segmentation_qc/` before trusting an image.
 - **GFP classification is a threshold.** A dim GFP+ T cell is called a tumour cell; check
   `segmentation_qc/` (cyan vs. yellow outlines) and tune `--gfp-fraction` if the colours are wrong.
-- The raw microscopy files are not tracked in git (~40 MB each, see `.gitignore`).
+- **Crowded fields are the hard case.** Where cells are packed, the nearest-nucleus watershed draws
+  the boundary between them, not the membrane, so both the cell shapes and the contact are only as
+  good as that guess.
+- The raw microscopy files and the analysis output are not tracked in git (~40 MB per image, and
+  the mask stacks alone run to hundreds of MB; see `.gitignore`).

@@ -7,7 +7,7 @@ import pandas as pd
 import tifffile
 from scipy import stats
 
-from . import plotting, segmentation, synapse
+from . import plotting, rois, segmentation, synapse
 from .io import list_stacks, load_stack
 
 KEY_METRIC = "Contact_Area_um2"
@@ -44,31 +44,32 @@ def analyse_image(path, out, voxel_override=None, channels=(0, 1, 2), opts=None)
             nuclei[nuclei == label] = 0
     classes = {k: v for k, v in classes.items() if (bodies == k).any()}
 
-    rows = synapse.measure(stack, nuclei, bodies, cores, classes, voxel, opts["min_area_um2"],
-                           opts["shell_um"])
+    rows, synapses = synapse.measure(stack, nuclei, bodies, cores, classes, voxel,
+                                     opts["min_area_um2"], opts["shell_um"])
     n_t = sum(1 for kind, _ in classes.values() if kind == segmentation.T_CELL)
     for r in rows:
         r.update(Image=name, Voxel_Z_um=voxel[0], Voxel_XY_um=voxel[2],
                  N_T_Cells=n_t, N_Tumour_Cells=len(classes) - n_t,
                  Clipped_Z=clipped_z[r["T_Cell"]] or clipped_z[r["Tumour_Cell"]])
 
-    _write_masks(out / "masks", name, bodies, nuclei, voxel)
+    _write_masks(out / "masks", name, bodies, nuclei, synapses, voxel)
+    rois.write(out / "rois" / f"{name}.zip", bodies, synapses, classes)
     plotting.plot_image_qc(
         out / "segmentation_qc" / f"{name}.png", stack, bodies, classes, rows, voxel,
         f"{name}  |  T cells: {n_t}  tumour cells: {len(classes) - n_t}  synapses: {len(rows)}")
-    for i, r in enumerate(rows, start=1):
+    for r in rows:
         plotting.plot_synapse(
-            out / "per_synapse" / f"{name}_IS{i:02d}.png", stack, bodies, r, voxel,
+            out / "per_synapse" / f"{name}_IS{r['IS']:02d}.png", stack, bodies, r, voxel,
             "{}  IS {}  T{}-Tumour{}  area={:.2f} um2  d={:.2f} um".format(
-                name, i, r["T_Cell"], r["Tumour_Cell"], r[KEY_METRIC],
+                name, r["IS"], r["T_Cell"], r["Tumour_Cell"], r[KEY_METRIC],
                 r["Contact_Diameter_um"]))
     return rows
 
 
-def _write_masks(out, name, bodies, nuclei, voxel):
+def _write_masks(out, name, bodies, nuclei, synapses, voxel):
     """Label images as ImageJ-readable 16-bit stacks, so the result can be checked in Fiji."""
     out.mkdir(parents=True, exist_ok=True)
-    for tag, arr in (("bodies", bodies), ("nuclei", nuclei)):
+    for tag, arr in (("bodies", bodies), ("nuclei", nuclei), ("synapses", synapses)):
         tifffile.imwrite(out / f"{name}_{tag}.tif", arr.astype(np.uint16), imagej=True,
                          resolution=(1 / voxel[2], 1 / voxel[1]),
                          metadata={"spacing": voxel[0], "unit": "um", "axes": "ZYX"})
@@ -154,7 +155,7 @@ def main(argv=None):
                          "then try a lower --gfp-fraction or --snr, or --expand-um 0.3")
 
     df = _conditions(pd.DataFrame(rows), a.samples)
-    front = ["Image", "Condition", "T_Cell", "Tumour_Cell", KEY_METRIC, "Contact_Diameter_um",
+    front = ["Image", "Condition", "IS", "T_Cell", "Tumour_Cell", KEY_METRIC, "Contact_Diameter_um",
              "Contact_Fraction_T", "mCherry_Enrichment"]
     df = df[front + [c for c in df.columns if c not in front]]
     df.to_csv(out / "synapse_table.csv", index=False)
