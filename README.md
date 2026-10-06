@@ -59,7 +59,9 @@ Useful options:
 | `--voxel` | from file metadata | override `dz,dy,dx` in µm |
 | `--snr` | `3.0` | how many robust SDs above background a voxel must be to count as stained |
 | `--gfp-fraction` | `0.3` | GFP+ fraction around a nucleus needed to call it a T cell |
-| `--min-separation-um` | `3.0` | smallest distance between two nuclear centres (splitting touching nuclei) |
+| `--min-separation-um` | `4.0` | smallest distance between two nuclear centres. **The parameter to tune first**: raise it if one nucleus is cut in two, lower it if two nuclei are merged |
+| `--split` | `shape` | where the border between two touching cells goes: the waist of their shared footprint (`shape`) or half-way between their nuclei (`nucleus`) |
+| `--open-um` | `0.4` | isolated specks smaller than this are removed from the cell footprint |
 | `--expand-um` | `0.0` | extra growth of each cell territory; raise to `0.3` if real contacts are missed |
 | `--min-area-um2` | `0.5` | contacts smaller than this are not counted as a synapse |
 | `--border` | `xy` | drop cells clipped by the sides of the field; `zyx` also drops cells clipped in z, `none` keeps everything |
@@ -93,7 +95,7 @@ The same information is also written as label stacks in `results/masks/` (`_bodi
 | 1 | **Collect and screen the files.** Glob `--pattern` over `--data-dir`, read each `.czi` / ImageJ `.tif` into a `[C, Z, Y, X]` array and take the voxel size from its metadata. Files with fewer than 4 z planes (overview tiles, single snapshots) are skipped, and `--channels` is checked against the file | [`io.py`](is_analysis/io.py) `list_stacks`, `load_stack`; [`pipeline.py`](is_analysis/pipeline.py) `analyse_image` |
 | 2 | **Find the nuclei (DAPI).** Gaussian smoothing → Otsu → closing → hole filling → objects below `--min-nucleus-um3` dropped. Touching nuclei are split by a watershed on the 3D distance map, with one seed per maximum at least `--min-separation-um` apart. Anisotropic voxels are handled throughout, so every distance is in µm, not in pixels | [`segmentation.py`](is_analysis/segmentation.py) `segment_nuclei` |
 | 3 | **Decide what each nucleus is.** Fraction of GFP+ voxels in a 1 µm shell around it; above `--gfp-fraction` it is a T cell, otherwise a tumour cell | `segmentation.py` `classify` |
-| 4 | **Grow the nuclei into cell bodies**, each from the channel that marks it: the T cell body is the GFP+ volume, the tumour body is the filled mCherry+ surface. Each type is split among its own nuclei (nearest-nucleus watershed), and voxels claimed by both channels go to the nearer nucleus. Boundaries are put at the **half-maximum** level, not at background + 3 SD (see below) | `segmentation.py` `cell_bodies`, `half_max`, `fill` |
+| 4 | **Grow the nuclei into cell bodies.** The cell footprint is every channel at once — DAPI, GFP and mCherry at their **half-maximum** level (see below), each hole-filled on its own so that a hollow surface stain becomes a solid body, then combined. Two cells that touch share one blob, which is cut at its **waist** (watershed on the distance transform of the footprint, seeded by the nuclei) | `segmentation.py` `cell_bodies`, `half_max`, `fill` |
 | 5 | **Drop the cells that cannot be measured**: those clipped by the sides of the field. Cells clipped by the first or last z plane are kept and flagged `Clipped_Z` | `pipeline.py` `analyse_image`, `segmentation.clipped` |
 | 6 | **Find the contacts.** One pass over the three face directions gives every pair of touching bodies and a first area estimate; T–T and tumour–tumour pairs are discarded | [`synapse.py`](is_analysis/synapse.py) `contact_pairs`, `interface_mask` |
 | 7 | **Measure each synapse.** Area from a marching-cubes mesh of the T cell, taking the triangles that face the tumour cell; plus the contact extents, the cell volumes and surfaces | `synapse.py` `contact_area_mesh`, `surface_area`, `extents_um` |
@@ -107,7 +109,19 @@ A fluorescent edge is blurred by the microscope, so a "background + 3 SD" thresh
 hundred nm *outside* the real boundary and inflates every cell. The body masks therefore use the
 **half-maximum level** — half-way between the background and the stained signal — which is where a
 blurred step actually crosses its own mid-point. On the synthetic test below this brings the cell
-volumes to within 10 % of the truth instead of ~80 % too large.
+volumes to within ~20 % of the truth instead of ~80 % too large.
+
+### Where the border between two touching cells is put
+
+Two cells in contact share one blob of foreground, and the border has to be guessed. The default
+`--split shape` cuts the blob at its **waist**: a watershed on the distance transform, seeded by
+the nuclei, which puts the border where the shared outline pinches in — where two cells pressed
+together actually meet, regardless of their relative size. `--split nucleus` instead puts it
+half-way between the two nuclei, which is more stable in very noisy images but pushes the border
+into the larger of the two cells.
+
+Neither is a membrane. This is the weakest assumption in the pipeline, and a membrane stain would
+replace it outright.
 
 ### Cells clipped in z
 
@@ -172,13 +186,14 @@ python scripts/validate.py --dz 0.4
 | true area (µm²) | measured, dz = 0.4 µm | measured, dz = 1.0 µm | true contact diameter (µm) | measured `Contact_Length_um`, dz = 0.4 / 1.0 |
 |---|---|---|---|---|
 | 7.07 | 9.90 (×1.40) | 7.66 (×1.08) | 3.0 | 3.2 / 2.8 |
-| 19.63 | 22.72 (×1.16) | 22.46 (×1.14) | 5.0 | 4.9 / 4.8 |
-| 38.48 | 48.55 (×1.26) | 49.15 (×1.28) | 7.0 | 6.8 / 6.4 |
+| 19.63 | 21.92 (×1.12) | 21.53 (×1.10) | 5.0 | 4.9 / 4.8 |
+| 38.48 | 39.49 (×1.03) | 38.31 (×1.00) | 7.0 | 6.8 / 6.4 |
 
-Cell volumes come out within ~10 % (T cell 268 µm³ true, 256–267 measured; tumour 1437 µm³ true,
-1470–1544 measured).
+Cell volumes come out within ~20 % (T cell 268 µm³ true, 219–267 measured; tumour 1437 µm³ true,
+1487–1543 measured).
 
-So: **`Contact_Area_um2` is systematically 10–40 % too large in absolute terms** — the segmented
+So: **`Contact_Area_um2` is accurate to a few per cent for a contact of a few µm across, and up
+to ~40 % too large for the smallest ones** — the segmented
 boundary cannot be more precise than the point spread function, and a contact is the small
 difference between two large surfaces. The ranking between conditions is preserved, which is what
 a comparison needs. `Contact_Length_um` tracks the true contact diameter to within ~0.5 µm and is
@@ -201,8 +216,8 @@ python scripts/run_analysis.py \
 ```
 
 The `5_stack.czi` / `5_stack1.czi` overview tiles are single planes and are skipped automatically.
-16 stacks gave 81 contacts, median `Contact_Area_um2` ≈ 47 µm² with a very wide spread
-(IQR 16–140 µm²). The three things that spread comes from are the next section.
+Of the 18 stacks, 15 contained at least one contact: 52 in total, median `Contact_Area_um2`
+≈ 50 µm² with a wide spread (IQR 18–97 µm²). What that spread comes from is the next section.
 
 ## Next experiments
 
@@ -245,17 +260,19 @@ What to do before the next imaging session:
 
 ### 3. Separate a real synapse from two cells that merely touch
 
-The pipeline currently calls **every** T cell / tumour cell contact a synapse. In the run, about
-15 % of rows had `Contact_Fraction_T > 0.25` — cells interlocked in a clump, where the measured
-"contact" is a long irregular boundary set by the watershed rather than by a membrane, and where
-the area runs to several hundred µm². Dropping those moves the median from 47 to 40 µm². The rest
-of the distribution still mixes focal contacts with incidental apposition.
+The pipeline currently calls **every** T cell / tumour cell contact a synapse. In the run, 6 % of
+rows had `Contact_Fraction_T > 0.25` — cells wrapped around each other, where the measured
+"contact" is a long irregular boundary set by the shape of the clump rather than by a membrane.
+Dropping those barely moves the median (50 → 49 µm²), so this is no longer about a few outliers:
+the whole distribution mixes focal contacts with incidental apposition, and nothing in the data
+separates them.
 
 Ideas, roughly in order of effort:
 
 - **a size/shape filter.** Exclude rows above a `Contact_Fraction_T` cut-off and below
   `--min-area-um2`, and check the excluded ones in `per_synapse/` before fixing the threshold. The
-  quickest version: add a `--max-fraction-t` option and report how many rows it removes;
+  quickest version: add a `--max-fraction-t` option and report how many rows it removes. On this
+  dataset it would change little, so it is worth doing only together with one of the next two;
 - **a compactness criterion.** A mature synapse is a flat, roughly circular patch, so
   `Contact_Length_um / Contact_Width_um` near 1 and `Contact_Area_um2` close to
   `π·(Contact_Length_um/2)²`. An interlocking clump fails both. Those columns already exist — the
@@ -292,9 +309,13 @@ image/dish as a random effect.
   `mCherry_SNR` and the figures in `segmentation_qc/` before trusting an image.
 - **GFP classification is a threshold.** A dim GFP+ T cell is called a tumour cell; check
   `segmentation_qc/` (cyan vs. yellow outlines) and tune `--gfp-fraction` if the colours are wrong.
-- **Crowded fields are the hard case.** Where cells are packed, the nearest-nucleus watershed draws
-  the boundary between them, not the membrane, so both the cell shapes and the contact are only as
-  good as that guess.
+- **Crowded fields are the hard case.** Where cells are packed, the border between two cells is
+  drawn at the waist of their shared outline, not at a membrane, so both the cell shapes and the
+  contact are only as good as that guess.
+- **Nucleus splitting is the parameter that matters most.** If `--min-separation-um` is too small
+  a large nucleus is cut in two, which splits the cell and reports one contact as several small
+  ones; too large and two neighbouring cells are merged and their contact disappears. Check
+  `segmentation_qc/` for cells with a line drawn through them.
 - The raw microscopy files are not tracked in git (~40 MB per image, see `.gitignore`). The
   **analysis output is**: `results/` in this repository is the complete output of the
   2026-06-04 run, so the figures, the ROIs and the table can be read without re-running anything.

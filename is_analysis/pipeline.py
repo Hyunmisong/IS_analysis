@@ -32,8 +32,8 @@ def analyse_image(path, out, voxel_override=None, channels=(0, 1, 2), opts=None)
     nuclei = segmentation.segment_nuclei(dapi, voxel, opts["min_nucleus_um3"],
                                          opts["min_separation_um"])
     classes = segmentation.classify(nuclei, gfp, voxel, opts["snr"], opts["gfp_fraction"])
-    bodies, cores = segmentation.cell_bodies(nuclei, classes, gfp, mcherry, voxel, opts["snr"],
-                                             opts["min_radius_um"], opts["expand_um"])
+    bodies, cores = segmentation.cell_bodies(nuclei, gfp, mcherry, dapi, voxel, opts["snr"],
+                                             opts["open_um"], opts["expand_um"], opts["split"])
     clipped_z = {}
     for label, _ in list(segmentation.slices(bodies)):
         mask = bodies == label
@@ -119,10 +119,14 @@ def main(argv=None):
     ap.add_argument("--gfp-fraction", type=float, default=0.3,
                     help="GFP+ voxel fraction around a nucleus needed to call it a T cell")
     ap.add_argument("--min-nucleus-um3", type=float, default=20.0, help="smallest accepted nucleus")
-    ap.add_argument("--min-separation-um", type=float, default=3.0,
-                    help="smallest distance between two nuclear centres")
-    ap.add_argument("--min-radius-um", type=float, default=1.5,
-                    help="minimum cell body grown around every nucleus")
+    ap.add_argument("--min-separation-um", type=float, default=4.0,
+                    help="smallest distance between two nuclear centres; raise it if one nucleus "
+                         "is split in two, lower it if two nuclei are merged")
+    ap.add_argument("--open-um", type=float, default=0.4,
+                    help="isolated specks smaller than this are removed from the cell footprint")
+    ap.add_argument("--split", choices=("shape", "nucleus"), default="shape",
+                    help="put the border between two touching cells at the waist of their "
+                         "shared footprint (shape) or half-way between their nuclei (nucleus)")
     ap.add_argument("--expand-um", type=float, default=0.0,
                     help="extra territory growth, if real contacts are missed (inflates the area)")
     ap.add_argument("--min-area-um2", type=float, default=0.5,
@@ -142,8 +146,8 @@ def main(argv=None):
     channels = tuple(int(c) for c in a.channels.split(","))
     voxel = tuple(float(v) for v in a.voxel.split(",")) if a.voxel else None
     opts = {k: getattr(a, k) for k in
-            ("snr", "gfp_fraction", "min_nucleus_um3", "min_separation_um", "min_radius_um",
-             "expand_um", "min_area_um2", "shell_um", "border")}
+            ("snr", "gfp_fraction", "min_nucleus_um3", "min_separation_um",
+             "expand_um", "min_area_um2", "shell_um", "border", "open_um", "split")}
 
     rows = []
     for path in files:

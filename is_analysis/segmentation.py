@@ -56,7 +56,7 @@ def half_max(img, voxel, snr=3.0, sigma_um=0.3):
     return sm > 0.5 * (bg + np.median(sm[inside]))
 
 
-def segment_nuclei(dapi, voxel, min_volume_um3=20.0, min_sep_um=3.0, sigma_um=0.4):
+def segment_nuclei(dapi, voxel, min_volume_um3=20.0, min_sep_um=4.0, sigma_um=0.4):
     """Label nuclei in 3D; touching nuclei are split by a distance-transform watershed."""
     sm = smooth(dapi, voxel, sigma_um)
     mask = sm > threshold_otsu(sm)
@@ -64,13 +64,17 @@ def segment_nuclei(dapi, voxel, min_volume_um3=20.0, min_sep_um=3.0, sigma_um=0.
     mask = ndi.binary_fill_holes(mask)
     mask = remove_small_objects(mask, int(min_volume_um3 / np.prod(voxel)))
     dist = ndi.distance_transform_edt(mask, sampling=voxel)
-    seeds = ndi.label(_peaks(smooth(dist, voxel, 0.5), mask, voxel, min_sep_um))[0]
+    seeds = ndi.label(_peaks(smooth(dist, voxel, min_sep_um / 4), mask, voxel, min_sep_um))[0]
     labels = watershed(-dist, seeds, mask=mask)
     return _drop_small(labels, voxel, min_volume_um3)
 
 
 def _peaks(dist, mask, voxel, min_sep_um):
-    """One seed per local maximum of the distance map, maxima closer than min_sep_um merged."""
+    """One seed per local maximum of the distance map, maxima closer than min_sep_um merged.
+
+    The distance map is smoothed by min_sep_um / 4 first (see `segment_nuclei`): a large nucleus
+    has a lumpy map and would otherwise raise several maxima and be cut into pieces.
+    """
     footprint = ball(min_sep_um / 2, voxel)
     return mask & (dist >= ndi.maximum_filter(dist, footprint=footprint)) & (dist > 0)
 
@@ -96,31 +100,42 @@ def classify(nuclei, gfp, voxel, snr=3.0, gfp_fraction=0.3, shell_um=1.0):
     return out
 
 
-def cell_bodies(nuclei, classes, gfp, mcherry, voxel, snr=3.0, min_radius_um=1.5,
-                expand_um=0.0):
-    """Grow every nucleus into a cell body, using the channel that actually marks that cell.
+def cell_bodies(nuclei, gfp, mcherry, dapi, voxel, snr=3.0, open_um=0.4, expand_um=0.0,
+                split="shape"):
+    """Grow every nucleus into a cell body and split the touching cells apart.
 
-    T cells carry GFP in the cytosol, so their body is the GFP+ volume; the tumour cells are
-    outlined by the mCherry antigen stain on their surface, so their body is the filled mCherry+
-    volume. Each type is then split among its own nuclei (nearest-nucleus watershed) and the
-    Returns (bodies, cores): the territories grown by `expand_um`, which closes the dark gap
-    between two cells that are in contact, and the ungrown ones. Contacts are looked for in
-    `bodies`; intensities are read around `cores`, whose edge still follows the real staining.
+    The footprint of a cell is taken from **every channel at once** - DAPI, GFP and mCherry
+    thresholded at their half maximum, closed, hole-filled, and cleaned of isolated speckle.
+    Using one channel per cell type fails whenever that channel is weak: a tumour cell with a
+    dim antigen stain then collapses onto its nucleus and the T cell next to it takes the space
+    in between, which turns a wide apposition into a sliver.
+
+    Two cells that touch share one blob of foreground, and `split` decides where the border goes:
+
+    - "shape" cuts it at the waist of that blob (watershed on the distance transform), which is
+      where two cells pressed together actually meet, whatever their relative size. Default.
+    - "nucleus" puts it half-way between the two nuclei. Stable, but it misplaces the border
+      between cells of unequal size, pushing it into the larger one.
+
+    Returns (bodies, cores): the territories grown by `expand_um` and the ungrown ones. Contacts
+    are looked for in `bodies`; intensities are read around `cores`.
     """
-    t_nuclei = np.isin(nuclei, [l for l, (kind, _) in classes.items() if kind == T_CELL]) * nuclei
-    tumour_nuclei = np.where(t_nuclei > 0, 0, nuclei)
-    t_fg = _body_mask(gfp, voxel, snr, t_nuclei, min_radius_um)
-    tumour_fg = _body_mask(mcherry, voxel, snr, tumour_nuclei, min_radius_um)
+    fg = np.zeros(dapi.shape, bool)
+    for channel in (dapi, gfp, mcherry):  # filled per channel: a hollow surface stain
+        # only becomes a body once its own shell is closed and filled
+        fg |= fill(ndi.binary_closing(half_max(channel, voxel, snr), ball(0.6, voxel)))
+    if open_um > 0:
+        fg = ndi.binary_opening(fg, ball(open_um, voxel))  # isolated noise speckle
+    fg |= nuclei > 0
+    blobs, _ = ndi.label(fg)
+    keep = np.unique(blobs[nuclei > 0])
+    fg = np.isin(blobs, keep[keep > 0])
 
-    to_t = ndi.distance_transform_edt(t_nuclei == 0, sampling=voxel)
-    to_tumour = ndi.distance_transform_edt(tumour_nuclei == 0, sampling=voxel)
-    both = t_fg & tumour_fg  # claimed by both channels -> goes to the nearer nucleus
-    t_fg &= ~(both & (to_tumour < to_t))
-    tumour_fg &= ~(both & (to_t <= to_tumour))
-
-    elevation = ndi.distance_transform_edt(nuclei == 0, sampling=voxel)
-    cores = watershed(elevation, t_nuclei, mask=t_fg)
-    cores = np.where(cores > 0, cores, watershed(elevation, tumour_nuclei, mask=tumour_fg))
+    if split == "shape":
+        elevation = -smooth(ndi.distance_transform_edt(fg, sampling=voxel), voxel, 0.3)
+    else:
+        elevation = ndi.distance_transform_edt(nuclei == 0, sampling=voxel)
+    cores = watershed(elevation, nuclei, mask=fg)
     bodies = expand_labels(cores, distance=expand_um, spacing=voxel) if expand_um > 0 else cores
     return bodies, cores
 
@@ -136,15 +151,6 @@ def fill(mask):
     for z, plane in enumerate(mask):
         filled[z] |= ndi.binary_fill_holes(plane)
     return filled
-
-
-def _body_mask(img, voxel, snr, own_nuclei, min_radius_um):
-    """Signal above background, holes filled, restricted to the blobs that contain a nucleus."""
-    mask = fill(ndi.binary_closing(half_max(img, voxel, snr), ball(0.5, voxel)))
-    blobs, _ = ndi.label(mask)
-    keep = np.unique(blobs[own_nuclei > 0])
-    mask = np.isin(blobs, keep[keep > 0])
-    return mask | ndi.binary_dilation(own_nuclei > 0, ball(min_radius_um, voxel))
 
 
 def clipped(mask, axes="zyx"):
