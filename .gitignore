@@ -4,6 +4,3 @@ data/raw/*
 *.czi
 __pycache__/
 *.pyc
-
-# analysis output (the mask stacks alone are hundreds of MB)
-results/

@@ -295,5 +295,7 @@ image/dish as a random effect.
 - **Crowded fields are the hard case.** Where cells are packed, the nearest-nucleus watershed draws
   the boundary between them, not the membrane, so both the cell shapes and the contact are only as
   good as that guess.
-- The raw microscopy files and the analysis output are not tracked in git (~40 MB per image, and
-  the mask stacks alone run to hundreds of MB; see `.gitignore`).
+- The raw microscopy files are not tracked in git (~40 MB per image, see `.gitignore`). The
+  **analysis output is**: `results/` in this repository is the complete output of the
+  2026-06-04 run, so the figures, the ROIs and the table can be read without re-running anything.
+  The label stacks are LZW-compressed, which Fiji opens normally.

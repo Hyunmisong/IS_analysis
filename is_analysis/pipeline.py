@@ -71,6 +71,7 @@ def _write_masks(out, name, bodies, nuclei, synapses, voxel):
     out.mkdir(parents=True, exist_ok=True)
     for tag, arr in (("bodies", bodies), ("nuclei", nuclei), ("synapses", synapses)):
         tifffile.imwrite(out / f"{name}_{tag}.tif", arr.astype(np.uint16), imagej=True,
+                         compression="lzw",  # label images are ~100x smaller compressed
                          resolution=(1 / voxel[2], 1 / voxel[1]),
                          metadata={"spacing": voxel[0], "unit": "um", "axes": "ZYX"})
 
