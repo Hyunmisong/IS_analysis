@@ -56,8 +56,23 @@ Useful options:
 | `--min-separation-um` | `3.0` | smallest distance between two nuclear centres (splitting touching nuclei) |
 | `--expand-um` | `0.0` | extra growth of each cell territory; raise to `0.3` if real contacts are missed |
 | `--min-area-um2` | `0.5` | contacts smaller than this are not counted as a synapse |
+| `--border` | `xy` | drop cells clipped by the sides of the field; `zyx` also drops cells clipped in z, `none` keeps everything |
 | `--metric` | `Contact_Area_um2` | which column is plotted and tested |
 | `--control` | first condition | reference group of the statistics |
+
+## Running the 2026-06-04 co-culture set
+
+That acquisition stores the channels as **R-PE (mCherry), EGFP, DAPI**, so the channel order has
+to be given explicitly, and the `1_stack*` files have no GFP channel at all (DAPI, mCherry, ESID)
+and must be left out:
+
+```bash
+python scripts/run_analysis.py   --data-dir "<.../20260604/63x>" --pattern "[456]_stack*" --channels 2,1,0 --samples none
+```
+
+The `5_stack.czi` / `5_stack1.czi` overview tiles are single planes and are skipped automatically.
+The stacks are 13-21 planes at dz = 1 µm, i.e. barely deeper than one cell, so essentially every
+cell is flagged `Clipped_Z` - see the note on borders below.
 
 ## Pipeline
 
@@ -72,8 +87,11 @@ Useful options:
 | 7 | **Antigen**: mCherry in a ±0.5 µm band on the tumour surface, at the synapse vs. over the rest of that surface, both background-subtracted | `synapse.py` |
 | 8 | Per-image and per-synapse figures, pooled table, group statistics, final plot | `plotting.py`, `pipeline.py` |
 
-Cells clipped by the edge of the field of view (x, y or the first/last z plane) are dropped, since
-their volume and surface are not measurable; `--keep-border` keeps them.
+Cells clipped by the **sides** of the field are dropped, since their volume and surface are not
+measurable. Cells clipped by the **first or last z plane** are kept but flagged in the `Clipped_Z`
+column: a stack only a little deeper than a cell clips most cells in z, so dropping them would
+throw away the experiment. Their volume and surface are underestimated, so filter on `Clipped_Z`
+before reading `Contact_Fraction_T` or the volumes. `--border zyx` drops them instead.
 
 ### Where the boundary of a cell is put
 
@@ -118,6 +136,7 @@ nothing. The *contact area* does not depend on the mCherry level, only on the se
 | `mCherry_Enrichment` | their ratio; > 1 = antigen concentrated at the synapse |
 | `mCherry_Background`, `mCherry_SNR` | staining quality of that image |
 | `N_T_Cells`, `N_Tumour_Cells` | cells kept in that image, i.e. how crowded the field was |
+| `Clipped_Z` | one of the two cells reaches the first or last z plane, so its volume and surface are truncated |
 
 **`Contact_Fraction_T` is usually the fairer comparison**: a bigger T cell makes a bigger contact
 without being any more activated, and this column divides that out.
@@ -163,8 +182,9 @@ image/dish as a random effect.
 
 ## Known limitations
 
-- **Only contacts that are in the stack are found.** A cell clipped by the field of view is
+- **Only contacts that are in the stack are found.** A cell clipped by the side of the field is
   dropped, so synapses at the edge are missed and n is smaller than what the eye counts.
+  Cells clipped in z are kept but their volume and surface are truncated (`Clipped_Z`).
 - **z resolution.** A 1 µm z step still worked on the synthetic data, but it under-samples the
   ~0.8 µm antigen rim; dz ≤ 0.4 µm is strongly preferred at 63×, and the same dz must be used for
   all conditions that are compared.

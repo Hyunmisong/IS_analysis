@@ -27,17 +27,17 @@ def plot_image_qc(path, stack, bodies, classes, rows, voxel, title):
     path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(7, 7))
     ax.imshow(rgb(stack))
-    flat = bodies.max(axis=0)
-    for label, (kind, _) in classes.items():
-        edge = find_boundaries(flat == label, mode="inner")
-        ax.contour(edge, levels=[0.5], colors=COLOURS[kind], linewidths=0.8)
-        y, x = np.argwhere(flat == label).mean(axis=0) if (flat == label).any() else (0, 0)
+    flat = {label: (bodies == label).any(axis=0) for label in classes}  # a small cell can be
+    for label, (kind, _) in classes.items():                             # hidden by a larger one
+        ax.contour(find_boundaries(flat[label], mode="inner"), levels=[0.5],
+                   colors=COLOURS[kind], linewidths=0.8)
+        y, x = np.argwhere(flat[label]).mean(axis=0)
         ax.text(x, y, str(label), color=COLOURS[kind], fontsize=7, ha="center", va="center")
     for r in rows:
-        y, x = _centre(flat, r["T_Cell"], r["Tumour_Cell"])
+        y, x = _centre(flat[r["T_Cell"]], flat[r["Tumour_Cell"]])
         ax.plot(x, y, "o", mfc="none", mec="w", ms=14, mew=1.2)
         ax.text(x + 9, y, f"{r['Contact_Area_um2']:.1f} um2", color="w", fontsize=7, va="center")
-    _scalebar(ax, voxel[2], flat.shape)
+    _scalebar(ax, voxel[2], bodies.shape[1:])
     ax.set_title(title, fontsize=9)
     ax.axis("off")
     fig.tight_layout()
@@ -80,10 +80,10 @@ def _dilate_plane(mask):
     return ndi.binary_dilation(mask, np.ones((3, 3), bool))
 
 
-def _centre(flat, a, b):
-    border = (flat == a) & _dilate_plane(flat == b)
-    pts = np.argwhere(border if border.any() else (flat == a))
-    return pts.mean(axis=0)
+def _centre(a, b):
+    """Where to put the marker: the middle of the a/b border in projection."""
+    border = a & _dilate_plane(b)
+    return np.argwhere(border if border.any() else a).mean(axis=0)
 
 
 def _scalebar(ax, dx_um, shape, length_um=5.0):

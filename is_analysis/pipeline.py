@@ -11,6 +11,7 @@ from . import plotting, segmentation, synapse
 from .io import list_stacks, load_stack
 
 KEY_METRIC = "Contact_Area_um2"
+MIN_PLANES = 4
 
 
 def analyse_image(path, out, voxel_override=None, channels=(0, 1, 2), opts=None):
@@ -19,6 +20,12 @@ def analyse_image(path, out, voxel_override=None, channels=(0, 1, 2), opts=None)
     stack, voxel = load_stack(path)
     if voxel_override:
         voxel = voxel_override
+    if stack.shape[1] < MIN_PLANES:  # overview tiles and single planes are not z-stacks
+        print("{}: skipped, only {} z plane(s)".format(Path(path).name, stack.shape[1]))
+        return None
+    if max(channels) >= stack.shape[0]:
+        raise SystemExit("{} has {} channel(s); --channels {} is out of range".format(
+            Path(path).name, stack.shape[0], ",".join(str(c) for c in channels)))
     stack = np.stack([stack[c] for c in channels])
     dapi, gfp, mcherry = stack
 
@@ -27,12 +34,14 @@ def analyse_image(path, out, voxel_override=None, channels=(0, 1, 2), opts=None)
     classes = segmentation.classify(nuclei, gfp, voxel, opts["snr"], opts["gfp_fraction"])
     bodies, cores = segmentation.cell_bodies(nuclei, classes, gfp, mcherry, voxel, opts["snr"],
                                              opts["min_radius_um"], opts["expand_um"])
-    if not opts["keep_border"]:
-        for label, _ in list(segmentation.slices(bodies)):
-            if segmentation.touches_border(bodies == label):
-                bodies[bodies == label] = 0
-                cores[cores == label] = 0
-                nuclei[nuclei == label] = 0
+    clipped_z = {}
+    for label, _ in list(segmentation.slices(bodies)):
+        mask = bodies == label
+        clipped_z[label] = segmentation.clipped(mask, "z")
+        if opts["border"] != "none" and segmentation.clipped(mask, opts["border"]):
+            bodies[mask] = 0
+            cores[mask] = 0
+            nuclei[nuclei == label] = 0
     classes = {k: v for k, v in classes.items() if (bodies == k).any()}
 
     rows = synapse.measure(stack, nuclei, bodies, cores, classes, voxel, opts["min_area_um2"],
@@ -40,7 +49,8 @@ def analyse_image(path, out, voxel_override=None, channels=(0, 1, 2), opts=None)
     n_t = sum(1 for kind, _ in classes.values() if kind == segmentation.T_CELL)
     for r in rows:
         r.update(Image=name, Voxel_Z_um=voxel[0], Voxel_XY_um=voxel[2],
-                 N_T_Cells=n_t, N_Tumour_Cells=len(classes) - n_t)
+                 N_T_Cells=n_t, N_Tumour_Cells=len(classes) - n_t,
+                 Clipped_Z=clipped_z[r["T_Cell"]] or clipped_z[r["Tumour_Cell"]])
 
     _write_masks(out / "masks", name, bodies, nuclei, voxel)
     plotting.plot_image_qc(
@@ -117,8 +127,9 @@ def main(argv=None):
                     help="contacts smaller than this are not counted as a synapse")
     ap.add_argument("--shell-um", type=float, default=0.5,
                     help="half-thickness of the shell used for the mCherry readout")
-    ap.add_argument("--keep-border", action="store_true",
-                    help="keep cells that are clipped by the edge of the field of view")
+    ap.add_argument("--border", choices=("xy", "zyx", "none"), default="xy",
+                    help="drop cells clipped by the sides of the field (xy), by any edge "
+                         "including the first/last z plane (zyx), or keep everything (none)")
     a = ap.parse_args(argv)
 
     out = Path(a.out)
@@ -130,13 +141,14 @@ def main(argv=None):
     voxel = tuple(float(v) for v in a.voxel.split(",")) if a.voxel else None
     opts = {k: getattr(a, k) for k in
             ("snr", "gfp_fraction", "min_nucleus_um3", "min_separation_um", "min_radius_um",
-             "expand_um", "min_area_um2", "shell_um", "keep_border")}
+             "expand_um", "min_area_um2", "shell_um", "border")}
 
     rows = []
     for path in files:
         found = analyse_image(path, out, voxel, channels, opts)
-        print("{}: {} synapse(s)".format(path.name, len(found)), flush=True)
-        rows += found
+        if found is not None:
+            print("{}: {} synapse(s)".format(path.name, len(found)), flush=True)
+        rows += found or []
     if not rows:
         raise SystemExit("no T cell / tumour cell contact found. Check results/segmentation_qc/, "
                          "then try a lower --gfp-fraction or --snr, or --expand-um 0.3")

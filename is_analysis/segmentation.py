@@ -147,10 +147,17 @@ def _body_mask(img, voxel, snr, own_nuclei, min_radius_um):
     return mask | ndi.binary_dilation(own_nuclei > 0, ball(min_radius_um, voxel))
 
 
-def touches_border(mask):
-    """True if the cell is clipped by the field of view (x/y edge or first/last z plane)."""
-    return bool(mask[0].any() or mask[-1].any() or mask[:, 0].any() or mask[:, -1].any()
-                or mask[:, :, 0].any() or mask[:, :, -1].any())
+def clipped(mask, axes="zyx"):
+    """True if the cell runs into the edge of the field of view along any of `axes`.
+
+    "xy" asks only about the sides of the field, "zyx" also about the first and last z plane.
+    A stack that is barely deeper than a cell clips most cells in z, so excluding those would
+    throw away the whole experiment; they are flagged instead.
+    """
+    for axis, name in enumerate("zyx"):
+        if name in axes and (mask.take(0, axis).any() or mask.take(-1, axis).any()):
+            return True
+    return False
 
 
 def slices(labels):
