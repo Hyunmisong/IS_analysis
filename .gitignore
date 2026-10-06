@@ -1,0 +1,6 @@
+# raw microscopy data is too large for git (~40 MB per image)
+data/raw/*
+!data/raw/.gitkeep
+*.czi
+__pycache__/
+*.pyc

@@ -1,0 +1,9 @@
+numpy
+scipy
+scikit-image
+pandas
+matplotlib
+openpyxl
+tifffile
+czifile
+imagecodecs
