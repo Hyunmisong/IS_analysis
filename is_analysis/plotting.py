@@ -99,8 +99,9 @@ def plot_groups(path, df, value, control, group_p, title):
     fig, ax = plt.subplots(figsize=(1.5 * len(groups) + 2, 4.2))
     data = [g[value].dropna().values for _, g in groups]
     ax.boxplot(data, tick_labels=[c for c, _ in groups], showfliers=False)
+    jitter = np.random.default_rng(0)  # seeded, so the same table always gives the same figure
     for i, values in enumerate(data, start=1):
-        ax.plot(np.random.normal(i, 0.055, len(values)), values, "o", ms=3.5, alpha=0.6,
+        ax.plot(jitter.normal(i, 0.055, len(values)), values, "o", ms=3.5, alpha=0.6,
                 color="#2b6cb0")
     top = max((v.max() for v in data if len(v)), default=1.0)
     for i, (condition, _) in enumerate(groups, start=1):

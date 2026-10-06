@@ -180,6 +180,15 @@ nothing. The *contact area* does not depend on the mCherry level, only on the se
 **`Contact_Fraction_T` is usually the fairer comparison**: a bigger T cell makes a bigger contact
 without being any more activated, and this column divides that out.
 
+## How the parameters were chosen
+
+[`docs/parameter-tuning.md`](docs/parameter-tuning.md) is the record: every setting in the table
+above, what it was measured against, and — more usefully — the four reasonable-looking changes
+that made the result *worse* and were backed out (dropping undersized nuclei as debris, merging
+them into their neighbour, a larger or a per-cell-type Cellpose diameter, forcing GFP+ voxels out
+of tumour bodies, and two ways of flagging the cells where two nuclei were detected as one).
+Read it before changing a default.
+
 ## Validation
 
 `scripts/make_test_data.py` builds synthetic pairs — two spheres flattened against a common plane,
