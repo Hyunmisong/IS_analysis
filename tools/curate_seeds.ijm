@@ -14,8 +14,12 @@
 // and tumour cells. In each round:
 //   * the points already found are shown, and the automatic cell outlines sit underneath as a
 //     white overlay so you can see what the program thought;
-//   * the multi-point tool is selected. Click to add a cell. Alt-click a point to remove it.
-//     To change a cell's type, remove it in one round and add it in the other;
+//   * the multi-point tool is selected. Click to add a cell. Alt-click exactly on a point to
+//     remove it - that only works within a few pixels, so zoom in (+) if you are missing;
+//   * then a second step asks you to draw around any points that should go. That is the
+//     reliable way to delete: draw a rectangle or a freehand loop round them and click OK.
+//     Leave the image unselected to keep everything;
+//   * to change a cell's type, remove it in one round and add it in the other;
 //   * z does not matter - click anywhere on the cell, on whichever plane you like. The analysis
 //     puts each point on the plane where its own DAPI signal is brightest;
 //   * click OK to go on to the next round, or Cancel to stop for the day.
@@ -115,23 +119,60 @@ function showOutlines(roiPath) {
 
 // Show one cell type's points, wait for the user to edit them, return the edited x (and set
 // editedY). ImageJ macros return one value, hence the global for the second array.
+// Show one cell type's points, let the user edit them, return the edited x (and set editedY).
+// ImageJ macros return one value, hence the global for the second array.
 function editRound(id, xs, ys, where, what, colour) {
     selectImage(id);
     run("Select None");
     setTool("multipoint");
-    run("Point Tool...", "type=Dot color=" + colour + " size=Medium");
+    // Hybrid = a cross with a dot in the middle, which stays visible over a noisy image, and the
+    // largest size also widens the few-pixel target that alt-click has to hit.
+    run("Point Tool...", "type=Hybrid color=" + colour + " size=[Extra Large] label");
     if (xs.length > 0) makeSelection("point", xs, ys);
     waitForUser(where + " - mark the " + what,
-        "Click to add a cell, alt-click a point to remove it.\n"
-        + "The plane does not matter.\n \n"
-        + "OK = done with the " + what + ".  Cancel = stop (finished images are saved).");
-    if (selectionType() != 10) {          // 10 = point selection; none left
-        editedY = newArray(0);
-        return newArray(0);
+        "Click to add a cell.\n"
+        + "Alt-click exactly on a point to remove it (zoom in with + if you keep missing).\n"
+        + "The plane does not matter.\n\n"
+        + "OK = go on to deleting.   Cancel = stop (finished images are saved).");
+    if (selectionType() == 10)
+        getSelectionCoordinates(xs, ys);
+    else
+        { xs = newArray(0); ys = newArray(0); }
+
+    xs = deleteRound(id, xs, ys, where, what, colour);
+    ys = editedY;
+    editedY = ys;
+    return xs;
+}
+
+// The reliable way to remove points: draw a region around them. Alt-click has to land within a
+// few pixels of a point, which is hard on a crowded field; a loop around them never misses.
+function deleteRound(id, xs, ys, where, what, colour) {
+    selectImage(id);
+    run("Select None");
+    marks = Overlay.size;
+    for (i = 0; i < xs.length; i++) {
+        makePoint(xs[i], ys[i], "small " + colour + " hybrid");
+        Overlay.addSelection;
     }
-    getSelectionCoordinates(sx, sy);
-    editedY = sy;
-    return sx;
+    run("Select None");
+    setTool("rectangle");
+    waitForUser(where + " - remove any wrong " + what,
+        "Draw a rectangle or a freehand loop around the points to delete.\n"
+        + "Every point inside it goes.\n\n"
+        + "OK with nothing drawn = keep them all.");
+    keptX = newArray(0); keptY = newArray(0);
+    area = (selectionType() >= 0 && selectionType() <= 4) || selectionType() == 9;
+    for (i = 0; i < xs.length; i++) {
+        if (area && selectionContains(xs[i], ys[i])) continue;
+        keptX = Array.concat(keptX, xs[i]);
+        keptY = Array.concat(keptY, ys[i]);
+    }
+    for (i = Overlay.size - 1; i >= marks; i--)   // take the temporary marks back off
+        Overlay.removeSelection(i);
+    run("Select None");
+    editedY = keptY;
+    return keptX;
 }
 
 function isImage(fileName) {
