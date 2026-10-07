@@ -19,6 +19,9 @@
 //                     (ctrl-click or shift-click to take several rows at once)
 //   to MOVE a cell    drag its circle
 //
+// The number drawn on a circle is the name of its row, so the two always point at the same
+// cell - including after deletions, which leave gaps in the numbering rather than shifting it.
+//
 // The plane does not matter: click anywhere on the cell, on whichever plane you like. Each
 // marker is placed at the plane where its own DAPI column is brightest.
 //
@@ -139,7 +142,16 @@ function editRound(id, xs, ys, where, what, colour) {
         roiManager("Deselect");
         roiManager("Set Color", colour);
         roiManager("Set Line Width", 2);
+        // name every cell after its number, so the row in the list and the number drawn on the
+        // image are the same text. ImageJ's own names are slice-and-coordinate strings, which
+        // match nothing on screen, and its index labels renumber themselves after a deletion.
+        for (i = 0; i < roiManager("count"); i++) {
+            roiManager("select", i);
+            roiManager("rename", "" + (i + 1));
+        }
+        roiManager("Deselect");
     }
+    run("Labels...", "color=white font=18 show use draw");
     roiManager("Show All with labels");
     run("Select None");
     setTool("point");
