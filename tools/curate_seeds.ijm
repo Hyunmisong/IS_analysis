@@ -2,27 +2,25 @@
 //
 // The automatic detection gets the cell *bodies* right once it has the right seeds, and gets
 // the seeds wrong in three ways: one nucleus found twice, two nuclei found as one, or the wrong
-// cell type. All three are fixed here, by editing one point per cell.
+// cell type. All three are fixed here, by editing one marker per cell.
 //
 //   Fiji > Plugins > Macros > Run...  and pick this file
 //   1st dialog = the folder of images that were analysed (.czi or *_stack.tif)
 //   2nd dialog = the results folder of the automatic run (it holds seeds/ and rois/)
-//   3rd dialog = where to save the corrected points (the repository's curation/ folder)
+//   3rd dialog = where to save the corrected markers (the repository's curation/ folder)
 //   then a short options dialog
 //
-// It then walks through the images one after another. For each one you get two rounds, T cells
-// and tumour cells. In each round:
-//   * the points already found are shown, and the automatic cell outlines sit underneath as a
-//     white overlay so you can see what the program thought;
-//   * the multi-point tool is selected. Click to add a cell. Alt-click exactly on a point to
-//     remove it - that only works within a few pixels, so zoom in (+) if you are missing;
-//   * then a second step asks you to draw around any points that should go. That is the
-//     reliable way to delete: draw a rectangle or a freehand loop round them and click OK.
-//     Leave the image unselected to keep everything;
-//   * to change a cell's type, remove it in one round and add it in the other;
-//   * z does not matter - click anywhere on the cell, on whichever plane you like. The analysis
-//     puts each point on the plane where its own DAPI signal is brightest;
-//   * click OK to go on to the next round, or Cancel to stop for the day.
+// It walks through the images one after another, two rounds each, T cells then tumour cells.
+// In every round the cells are both circles on the image and rows in the ROI Manager, the
+// window listing them beside the image. Each circle carries its row number.
+//
+//   to ADD a cell     click it on the image, then press  t
+//   to REMOVE a cell  click its row in the ROI Manager and press Delete
+//                     (ctrl-click or shift-click to take several rows at once)
+//   to MOVE a cell    drag its circle
+//
+// The plane does not matter: click anywhere on the cell, on whichever plane you like. Each
+// marker is placed at the plane where its own DAPI column is brightest.
 //
 // Each image is saved as soon as its two rounds are done, so stopping half way loses nothing:
 // leave "skip images already corrected" ticked next time and carry on where you left off.
@@ -30,17 +28,20 @@
 // Then re-run the analysis with  --curation <the folder you saved to>.
 
 var editedY = newArray(0);   // second return value of editRound()
+var markerPx = 26;           // diameter of the circles, set per image from the pixel size
 
 imageDir = getDirectory("The folder of images that were analysed");
 resultsDir = getDirectory("The results folder of the automatic run");
-outDir = getDirectory("Where to save the corrected points (curation/)");
+outDir = getDirectory("Where to save the corrected markers (curation/)");
 
 Dialog.create("Correct the cells");
 Dialog.addString("Only file names containing", "_stack", 20);
+Dialog.addNumber("Marker size (um)", 5);
 Dialog.addCheckbox("Skip images already corrected", true);
 Dialog.addCheckbox("Skip images with no automatic result", true);
 Dialog.show();
 filter = Dialog.getString();
+markerUm = Dialog.getNumber();
 skipDone = Dialog.getCheckbox();
 skipMissing = Dialog.getCheckbox();
 
@@ -57,11 +58,17 @@ for (i = 0; i < list.length; i++) {
 if (todo.length == 0)
     exit("Nothing to do in " + imageDir + "\n(filter \"" + filter + "\", and the skip options).");
 
+run("ROI Manager...");
+run("Labels...", "color=white font=18 show use draw");
+
 for (n = 0; n < todo.length; n++) {
     name = stripExtension(todo[n]);
     where = "(" + (n + 1) + "/" + todo.length + ") " + name;
     openImage(imageDir + todo[n]);
     id = getImageID();
+    getPixelSize(unit, pw, ph);
+    if (startsWith(unit, "micro") || unit == "um") markerPx = round(markerUm / pw);
+    else markerPx = 26;
     showOutlines(resultsDir + "rois" + File.separator + name + ".zip");
 
     tx = newArray(0); ty = newArray(0); ux = newArray(0); uy = newArray(0);
@@ -90,6 +97,7 @@ for (n = 0; n < todo.length; n++) {
     for (i = 0; i < ux.length; i++) out = out + ux[i] + "," + uy[i] + ",Tumour\n";
     File.saveString(out, outDir + name + ".csv");
     print(where + ": " + tx.length + " T cells, " + ux.length + " tumour cells saved");
+    roiManager("reset");
     selectImage(id);
     close();
 }
@@ -106,7 +114,7 @@ function openImage(path) {
     run("Enhance Contrast", "saturated=0.35");
 }
 
-// the automatic outlines, as a passive overlay so the ROI Manager stays free for the points
+// the automatic cell outlines, as a passive overlay so the ROI Manager stays free for the cells
 function showOutlines(roiPath) {
     if (!File.exists(roiPath)) return;
     roiManager("reset");
@@ -117,59 +125,53 @@ function showOutlines(roiPath) {
     Overlay.setStrokeColor("white");
 }
 
-// Show one cell type's points, wait for the user to edit them, return the edited x (and set
-// editedY). ImageJ macros return one value, hence the global for the second array.
-// Show one cell type's points, let the user edit them, return the edited x (and set editedY).
-// ImageJ macros return one value, hence the global for the second array.
+// One round: every cell of one type is a numbered circle on the image and a row in the ROI
+// Manager. Returns the edited x, and sets editedY to the matching y.
 function editRound(id, xs, ys, where, what, colour) {
     selectImage(id);
     run("Select None");
-    setTool("multipoint");
-    // Hybrid = a cross with a dot in the middle, which stays visible over a noisy image, and the
-    // largest size also widens the few-pixel target that alt-click has to hit.
-    run("Point Tool...", "type=Hybrid color=" + colour + " size=[Extra Large] label");
-    if (xs.length > 0) makeSelection("point", xs, ys);
-    waitForUser(where + " - mark the " + what,
-        "Click to add a cell.\n"
-        + "Alt-click exactly on a point to remove it (zoom in with + if you keep missing).\n"
-        + "The plane does not matter.\n\n"
-        + "OK = go on to deleting.   Cancel = stop (finished images are saved).");
-    if (selectionType() == 10)
-        getSelectionCoordinates(xs, ys);
-    else
-        { xs = newArray(0); ys = newArray(0); }
-
-    xs = deleteRound(id, xs, ys, where, what, colour);
-    ys = editedY;
-    editedY = ys;
-    return xs;
-}
-
-// The reliable way to remove points: draw a region around them. Alt-click has to land within a
-// few pixels of a point, which is hard on a crowded field; a loop around them never misses.
-function deleteRound(id, xs, ys, where, what, colour) {
-    selectImage(id);
-    run("Select None");
-    marks = Overlay.size;
+    roiManager("reset");
     for (i = 0; i < xs.length; i++) {
-        makePoint(xs[i], ys[i], "small " + colour + " hybrid");
-        Overlay.addSelection;
+        makeOval(xs[i] - markerPx / 2, ys[i] - markerPx / 2, markerPx, markerPx);
+        roiManager("add");
     }
+    if (roiManager("count") > 0) {
+        roiManager("Deselect");
+        roiManager("Set Color", colour);
+        roiManager("Set Line Width", 2);
+    }
+    roiManager("Show All with labels");
     run("Select None");
-    setTool("rectangle");
-    waitForUser(where + " - remove any wrong " + what,
-        "Draw a rectangle or a freehand loop around the points to delete.\n"
-        + "Every point inside it goes.\n\n"
-        + "OK with nothing drawn = keep them all.");
+    setTool("point");
+    run("Point Tool...", "type=Hybrid color=" + colour + " size=Large");
+
+    waitForUser(where + " - the " + what,
+        "ADD     click the cell, then press  t\n"
+        + "REMOVE  click its row in the ROI Manager, press Delete\n"
+        + "MOVE    drag the circle\n \n"
+        + "The plane does not matter.\n \n"
+        + "OK = done with the " + what + ".   Cancel = stop (finished images are saved).");
+
+    // a cell clicked but not yet committed with 't' - take it rather than lose it
+    if (selectionType() == 10 && roiManager("index") == -1)
+        roiManager("add");
+
     keptX = newArray(0); keptY = newArray(0);
-    area = (selectionType() >= 0 && selectionType() <= 4) || selectionType() == 9;
-    for (i = 0; i < xs.length; i++) {
-        if (area && selectionContains(xs[i], ys[i])) continue;
-        keptX = Array.concat(keptX, xs[i]);
-        keptY = Array.concat(keptY, ys[i]);
+    for (i = 0; i < roiManager("count"); i++) {
+        roiManager("select", i);
+        if (selectionType() == 10) {           // a point, or several added in one go
+            getSelectionCoordinates(px, py);
+            for (k = 0; k < px.length; k++) {
+                keptX = Array.concat(keptX, px[k]);
+                keptY = Array.concat(keptY, py[k]);
+            }
+        } else {                                // a circle: its centre is the cell
+            Roi.getBounds(bx, by, bw, bh);
+            keptX = Array.concat(keptX, round(bx + bw / 2));
+            keptY = Array.concat(keptY, round(by + bh / 2));
+        }
     }
-    for (i = Overlay.size - 1; i >= marks; i--)   // take the temporary marks back off
-        Overlay.removeSelection(i);
+    roiManager("reset");
     run("Select None");
     editedY = keptY;
     return keptX;

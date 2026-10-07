@@ -113,9 +113,10 @@ python scripts/run_analysis.py --data-dir data/raw
 
 # 2. in Fiji: Plugins > Macros > Run... > tools/curate_seeds.ijm
 #    pick the image folder, the results folder, and curation/ to save into. It then walks
-#    through every image in turn. Two rounds per cell type: first click to add cells, then
-#    draw a region around any points that should go. The plane does not matter: each point is
-#    placed at the brightest plane of its own DAPI column, so everything is clicked on one slice.
+#    through every image in turn, two rounds each (T cells, then tumour cells). The cells are
+#    numbered circles on the image and rows in the ROI Manager beside it: click a cell and press
+#    t to add one, select its row and press Delete to remove one. The plane does not matter -
+#    each marker is placed at the brightest plane of its own DAPI column.
 #    Each image is saved as its rounds finish, so Cancel stops for the day without losing
 #    anything; the next run skips what is already in curation/.
 
