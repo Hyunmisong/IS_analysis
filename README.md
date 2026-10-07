@@ -201,10 +201,16 @@ can a person.
 This is not an artefact of where the brightness is measured: repeating it inside each cell's own
 segmented body rather than in a box around its centre gives the same picture (25 cells in the
 band, 15 called T against 10 called tumour), so it is not GFP bleeding in from a neighbour above
-or below. The cells really are intermediate. What makes them so is not settled — a dim or dying
-cell, green autofluorescence in a tumour cell, or, if the GFP is the line's NFAT reporter rather
-than a constitutive marker, a resting T cell that has not been activated. The last would matter
-for more than this band, since GFP brightness would then track activation rather than identity.
+or below. The cells really are intermediate, and what makes them so is not settled. The GFP is
+IRES-linked to the CAR, so one possibility is simply that **a dim cell is a T cell expressing
+little CAR** — the two are translated from one transcript and should track each other. A dying
+cell, or green autofluorescence in a tumour cell, would look the same.
+
+If the first of those is what is happening, the band is not noise but a real, low-CAR tail of the
+T cell population, and `--unclear-gfp` removes the cells with the least CAR — a selection on
+something biologically meaningful, and a further reason to keep the unfiltered set as the primary
+result. Nothing in these images decides between the three, so none of them is assumed anywhere in
+the analysis.
 
 `--unclear-gfp 2,4` therefore exists: a cell in that band is typed `Unclear`. It **keeps its
 seed**, so the cells around it still get the right boundaries, but it never forms a synapse.
@@ -232,9 +238,9 @@ median enrichment 1.21 against 1.19, the same `mCherry_SNR`, areas spread over t
 So the filter costs 16 % of the data and buys no measurable accuracy. **The full hand-placed set
 in `results_curated/` is the primary result, and `results_curated_strict/` is the sensitivity
 check** showing the numbers do not rest on the cells that were hard to call. Both are in the
-repository. A brighter GFP exposure would narrow the band; what would settle it is a second,
-constitutive marker for the T cells (or for the tumour cells), so that identity does not depend
-on how brightly one channel happens to be expressed.
+repository. A brighter GFP exposure would narrow the band, but what would settle it is a second
+marker that reports *identity* rather than expression level — a dye or surface stain on one of
+the two cell types — so that a T cell with little CAR is still unambiguously a T cell.
 
 ## The code, in the order it runs
 
