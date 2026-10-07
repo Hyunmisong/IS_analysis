@@ -52,10 +52,11 @@ def analyse_image(path, out, voxel_override=None, channels=(0, 1, 2), opts=None)
             nuclei[nuclei == label] = 0
     classes = {k: v for k, v in classes.items() if (bodies == k).any()}
 
-    rows, synapses = synapse.measure(stack, nuclei, bodies, cores, classes, voxel,
-                                     opts["min_area_um2"], opts["shell_um"])
+    rows, synapses, dropped = synapse.measure(stack, nuclei, bodies, cores, classes, voxel,
+                                              opts["min_area_um2"], opts["shell_um"],
+                                              opts["max_fraction_t"])
     n_t = sum(1 for kind, _ in classes.values() if kind == segmentation.T_CELL)
-    for r in rows:
+    for r in rows + dropped:
         r.update(Image=name, Voxel_Z_um=voxel[0], Voxel_XY_um=voxel[2],
                  N_T_Cells=n_t, N_Tumour_Cells=len(classes) - n_t,
                  Clipped_Z=clipped_z[r["T_Cell"]] or clipped_z[r["Tumour_Cell"]],
@@ -73,7 +74,7 @@ def analyse_image(path, out, voxel_override=None, channels=(0, 1, 2), opts=None)
             "{}  IS {}  T{}-Tumour{}  area={:.2f} um2  d={:.2f} um".format(
                 name, r["IS"], r["T_Cell"], r["Tumour_Cell"], r[KEY_METRIC],
                 r["Contact_Diameter_um"]))
-    return rows
+    return rows, dropped
 
 
 def _write_masks(out, name, bodies, nuclei, synapses, voxel):
@@ -148,6 +149,10 @@ def main(argv=None):
                     help="extra territory growth, if real contacts are missed (inflates the area)")
     ap.add_argument("--min-area-um2", type=float, default=0.5,
                     help="contacts smaller than this are not counted as a synapse")
+    ap.add_argument("--max-fraction-t", type=float, default=0.5,
+                    help="a contact covering more than this fraction of the T cell's surface is "
+                         "two cells lying inside one another, not a synapse; those pairs go to "
+                         "excluded.csv instead of the table")
     ap.add_argument("--shell-um", type=float, default=0.5,
                     help="half-thickness of the shell used for the mCherry readout")
     ap.add_argument("--curation", default="",
@@ -169,14 +174,19 @@ def main(argv=None):
     opts = {k: getattr(a, k) for k in
             ("snr", "gfp_fraction", "min_nucleus_fraction", "min_separation_um", "nuclei",
              "nucleus_diameter_um",
-             "expand_um", "min_area_um2", "shell_um", "border", "open_um", "split", "curation")}
+             "expand_um", "min_area_um2", "shell_um", "border", "open_um", "split", "curation", "max_fraction_t")}
 
-    rows = []
+    rows, excluded = [], []
     for path in files:
         found = analyse_image(path, out, voxel, channels, opts)
-        if found is not None:
-            print("{}: {} synapse(s)".format(path.name, len(found)), flush=True)
-        rows += found or []
+        if found is None:
+            continue
+        kept, dropped = found
+        print("{}: {} synapse(s){}".format(
+            path.name, len(kept),
+            ", {} excluded as overlapping".format(len(dropped)) if dropped else ""), flush=True)
+        rows += kept
+        excluded += dropped
     if not rows:
         raise SystemExit("no T cell / tumour cell contact found. Check results/segmentation_qc/, "
                          "then try a lower --gfp-fraction or --snr, or --expand-um 0.3")
@@ -186,6 +196,10 @@ def main(argv=None):
              "Contact_Fraction_T", "mCherry_Enrichment"]
     df = df[front + [c for c in df.columns if c not in front]]
     df.to_csv(out / "synapse_table.csv", index=False)
+    if excluded:
+        pd.DataFrame(excluded).to_csv(out / "excluded.csv", index=False)
+        print("{} pair(s) excluded as overlapping -> {}".format(len(excluded),
+                                                                out / "excluded.csv"))
     try:
         df.to_excel(out / "synapse_table.xlsx", index=False)
     except ImportError:

@@ -72,6 +72,8 @@ Useful options:
 | `--open-um` | `0.4` | isolated specks smaller than this are removed from the cell footprint |
 | `--expand-um` | `0.0` | extra growth of each cell territory; raise to `0.3` if real contacts are missed |
 | `--min-area-um2` | `0.5` | contacts smaller than this are not counted as a synapse |
+| `--max-fraction-t` | `0.5` | a contact covering more than this fraction of the T cell surface is two cells inside one another; those pairs go to `excluded.csv` |
+| `--curation` | — | folder of hand-made `{image}.csv` seed files; see **Correcting the cells by hand** |
 | `--border` | `xy` | drop cells clipped by the sides of the field; `zyx` also drops cells clipped in z, `none` keeps everything |
 | `--metric` | `Contact_Area_um2` | which column is plotted and tested |
 | `--control` | first condition | reference group of the statistics |
@@ -98,14 +100,42 @@ The same information is also written as label stacks in `results/masks/` (`_bodi
 
 ## Correcting the cells by hand
 
+### Why this step exists
+
 The automatic detection gets the cell **bodies** right once it has the right seeds — on synthetic
 pairs the contact area lands within 3–40 % of the truth — and gets the **seeds** wrong in three
-ways that are easy to see and impossible to repair afterwards: one nucleus found twice, two
-nuclei found as one, or the wrong cell type. `docs/parameter-tuning.md` records five attempts to
-fix those automatically, all of which made the result worse.
+ways: one nucleus found twice, two nuclei found as one, or a tumour cell called a T cell because
+its mCherry is too dim to see. [`docs/parameter-tuning.md`](docs/parameter-tuning.md) records
+five attempts to repair those automatically — dropping undersized nuclei, merging them into their
+neighbour, a larger and a per-cell-type Cellpose diameter, forcing GFP+ voxels out of tumour
+bodies, and two ways of flagging the bad cells — **every one of which made the result worse**.
 
-So the seeds, and only the seeds, can be set by hand: **one point per cell, plus what kind of
-cell it is.** Everything downstream stays automatic.
+They all failed for the same reason. The DAPI channel has to be smoothed by 1 µm before the
+nuclei can be detected at all, so the boundary between two touching nuclei is not in the image
+any more; and the mCherry stain sits barely above background, so a tumour cell without a visible
+antigen is indistinguishable from a T cell that happens to be dim. **That information is missing
+from the data, not mis-handled by the code**, and no later step can recover it.
+
+What a person can still do is look at the DAPI and say "that is one cell, and it is a tumour
+cell". So the seeds, and only the seeds, are placed by hand: **one point per cell, plus what kind
+of cell it is.** Everything else stays automatic and identical between the two runs.
+
+![automatic versus hand-placed cells](docs/auto_vs_curated.png)
+
+This is `6_stack2-5`, the image where the two differ most. The automatic run called six of the
+blue DAPI-only cells T cells, because they have no detectable mCherry, so every contact they
+make was a T–T pair and was discarded: **1 synapse instead of 6**. Over the whole set, hand
+placement takes 60 synapses to 83 while the number of cells barely moves (T 15.6 → 15.1,
+tumour 5.9 → 5.8 per image) — the contacts were not being missed for want of cells, but because
+the cells on either side had been given the same type, or merged into one.
+
+**This step would not be needed with better images.** A brighter DAPI exposure would keep the
+boundary between two touching nuclei, and an mCherry stain that reaches `mCherry_SNR` ≥ 5 would
+let the tumour cells be recognised on their own. Both are in **Next experiments** below. With
+those, the automatic run should reproduce what was done here by hand, and the curation files
+become a record rather than a requirement.
+
+### How to do it
 
 ```bash
 # 1. run normally; this also writes results/seeds/{image}.csv, the starting point
@@ -117,8 +147,6 @@ python scripts/run_analysis.py --data-dir data/raw
 #    numbered circles on the image and rows in the ROI Manager beside it: click a cell and press
 #    t to add one, select its row and press Delete to remove one. The plane does not matter -
 #    each marker is placed at the brightest plane of its own DAPI column.
-#    Each image is saved as its rounds finish, so Cancel stops for the day without losing
-#    anything; the next run skips what is already in curation/.
 
 # 3. measure again from the corrected points, into a separate folder
 python scripts/run_analysis.py --data-dir data/raw --curation curation --out results_curated
@@ -128,6 +156,14 @@ An image with no file in `curation/` is detected automatically as before, so the
 mixed; the `Curated` column of the table says which rows came from hand-placed points. Keeping
 the output in `results_curated/` leaves the automatic run in `results/` intact, so the two can be
 compared and the repository keeps a record of what the program got wrong.
+
+### Contacts that are not synapses
+
+A hand-placed pair can still be two cells lying inside one another rather than touching.
+`--max-fraction-t` (default 0.5) moves any pair whose contact covers more than that fraction of
+the T cell's **whole** surface into `excluded.csv` instead of the table, with the reason. On this
+set it removed 9 pairs, at 0.54–0.91 of the T cell surface, and the largest contact left is at
+0.39 — the two groups are well separated, so anything between 0.4 and 0.5 gives the same answer.
 
 ## The code, in the order it runs
 
@@ -191,6 +227,7 @@ nothing. The *contact area* does not depend on the mCherry level, only on the se
 | `rois/{image}.zip` | the same outlines as ImageJ ROIs, for `tools/view_synapses.ijm` |
 | `seeds/{image}.csv` | one point per detected cell with its type — the starting point for `tools/curate_seeds.ijm` |
 | `masks/{image}_bodies.tif`, `_nuclei.tif`, `_synapses.tif` | the label stacks, ImageJ-readable |
+| `excluded.csv` | pairs removed by `--max-fraction-t`, with the reason — kept so nothing disappears silently |
 | `group_stats.csv` | per condition: n, median, mean, Mann-Whitney p vs the control |
 | `synapse_size.png` | the final box plot |
 
@@ -289,6 +326,10 @@ Next time:
 - keep dz identical across every condition that will be compared — the measured area depends on it;
 - then check that `Clipped_Z` is `False` for most rows. That is the one-line test that this is fixed.
 
+Raise the **DAPI** exposure in the same pass. At the moment the channel has to be smoothed by
+1 µm before the nuclei can be detected at all, which erases the boundary between two touching
+nuclei — the reason the cells had to be placed by hand on this set.
+
 ### 2. Get the mCherry (BCMA) staining above background
 
 `mCherry_SNR` had a median of ~1.7 across the run, and in some fields (e.g. `4_stack1`) the
@@ -302,12 +343,11 @@ What to do before the next imaging session:
   the median tumour-surface intensity with the median background. Aim for the stained surface at
   **≥ 5× the background SD** — the pipeline reports exactly this number as `mCherry_SNR`, so it
   can be checked on a single test image before committing to a full session;
-- raise the **DAPI** exposure in the same pass. The nuclei are currently so grainy that they have
-  to be smoothed before they can be detected at all, and their measured sizes are not reliable
-  enough to tell a dead cell from a well-segmented one;
 - if that is not reached, titrate the primary antibody and improve the blocking and washing before
   reaching for more laser power — the background here is diffuse antibody, not detector noise, so
   more gain raises signal and background together and `mCherry_SNR` does not improve;
+- reaching `mCherry_SNR` ≥ 5 would also let a tumour cell be recognised on its own. On this set
+  the dim ones were called T cells, which is most of why the cells had to be placed by hand;
 - include a **BCMA-negative tumour line** in the same session. It gives the true floor of
   `mCherry_IS`, which is what the enrichment ratio should be judged against;
 - if the antigen stays dim, add a general membrane or cytoplasmic stain for the tumour cells. The
@@ -325,10 +365,10 @@ separates them.
 
 Ideas, roughly in order of effort:
 
-- **a size/shape filter.** Exclude rows above a `Contact_Fraction_T` cut-off and below
-  `--min-area-um2`, and check the excluded ones in `per_synapse/` before fixing the threshold. The
-  quickest version: add a `--max-fraction-t` option and report how many rows it removes. On this
-  dataset it would change little, so it is worth doing only together with one of the next two;
+- **a size filter — done.** `--max-fraction-t` now removes pairs whose contact covers more than
+  half of the T cell's surface, into `excluded.csv`. On the hand-placed set that is 9 pairs, well
+  separated from the rest. It catches cells lying inside one another, not the harder question of
+  whether a genuine contact is a synapse;
 - **a compactness criterion.** A mature synapse is a flat, roughly circular patch, so
   `Contact_Length_um / Contact_Width_um` near 1 and `Contact_Area_um2` close to
   `π·(Contact_Length_um/2)²`. An interlocking clump fails both. Those columns already exist — the

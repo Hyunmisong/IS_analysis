@@ -107,8 +107,13 @@ def _crop(bodies, a, b, pad=2):
     return tuple(slice(int(l), int(h)) for l, h in zip(lo, hi))
 
 
-def measure(stack, nuclei, bodies, cores, classes, voxel, min_area_um2=0.5, shell_um=0.5):
-    """(rows, synapse label image): one row per T cell / tumour cell contact, largest first.
+def measure(stack, nuclei, bodies, cores, classes, voxel, min_area_um2=0.5, shell_um=0.5,
+            max_fraction_t=1.0):
+    """(rows, synapse label image, dropped): one row per T cell / tumour cell contact.
+
+    A contact covering more than `max_fraction_t` of the T cell's whole surface is not a synapse
+    but two cells lying inside one another - the pair is put in `dropped` instead of `rows`, so
+    nothing disappears silently.
 
     The label image carries the contact voxels of synapse *i* under the value *i*, i.e. the same
     numbering as the `IS` column and the per-synapse figures, so it can be overlaid in Fiji.
@@ -147,8 +152,12 @@ def measure(stack, nuclei, bodies, cores, classes, voxel, min_area_um2=0.5, shel
         )))
     found.sort(key=lambda f: -f[2]["Contact_Area_um2"])
     synapses = np.zeros(bodies.shape, np.uint16)
-    rows = []
-    for index, (sl, contact, row) in enumerate(found, start=1):
+    rows, dropped = [], []
+    for sl, contact, row in found:
+        if row["Contact_Fraction_T"] > max_fraction_t:
+            dropped.append(dict(Reason="Contact_Fraction_T > %.2f" % max_fraction_t, **row))
+            continue
+        index = len(rows) + 1
         synapses[sl][contact] = index
         rows.append(dict(IS=index, **row))
-    return rows, synapses
+    return rows, synapses, dropped
