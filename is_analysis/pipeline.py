@@ -32,7 +32,12 @@ def analyse_image(path, out, voxel_override=None, channels=(0, 1, 2), opts=None)
 
     curated = curation.file_for(opts["curation"], name)
     if curated:
-        nuclei, classes = curation.seeds(curation.read_points(curated), dapi, voxel)
+        points = curation.read_points(curated)
+        if opts["unclear_gfp"]:
+            low, high = opts["unclear_gfp"]
+            points = curation.mark_unclear(points, curation.gfp_snr(points, dapi, gfp, voxel),
+                                           low, high)
+        nuclei, classes = curation.seeds(points, dapi, voxel)
     else:
         nuclei = nuclei_detection.segment(dapi, voxel, opts["nuclei"],
                                           opts["min_nucleus_fraction"],
@@ -55,10 +60,13 @@ def analyse_image(path, out, voxel_override=None, channels=(0, 1, 2), opts=None)
     rows, synapses, dropped = synapse.measure(stack, nuclei, bodies, cores, classes, voxel,
                                               opts["min_area_um2"], opts["shell_um"],
                                               opts["max_fraction_t"])
-    n_t = sum(1 for kind, _ in classes.values() if kind == segmentation.T_CELL)
+    kinds = [kind for kind, _ in classes.values()]
+    n_t = kinds.count(segmentation.T_CELL)
+    n_tumour = kinds.count(segmentation.TUMOUR)
+    n_unclear = kinds.count(segmentation.UNKNOWN)
     for r in rows + dropped:
         r.update(Image=name, Voxel_Z_um=voxel[0], Voxel_XY_um=voxel[2],
-                 N_T_Cells=n_t, N_Tumour_Cells=len(classes) - n_t,
+                 N_T_Cells=n_t, N_Tumour_Cells=n_tumour, N_Unclear_Cells=n_unclear,
                  Clipped_Z=clipped_z[r["T_Cell"]] or clipped_z[r["Tumour_Cell"]],
                  Curated=bool(curated))
 
@@ -66,8 +74,9 @@ def analyse_image(path, out, voxel_override=None, channels=(0, 1, 2), opts=None)
     rois.write(out / "rois" / f"{name}.zip", bodies, synapses, classes)
     plotting.plot_image_qc(
         out / "segmentation_qc" / f"{name}.png", stack, bodies, classes, rows, voxel,
-        f"{name}  |  T cells: {n_t}  tumour cells: {len(classes) - n_t}  synapses: {len(rows)}"
-        + ("  |  hand-curated seeds" if curated else ""))
+        f"{name}  |  T cells: {n_t}  tumour cells: {n_tumour}"
+        + (f"  unclear: {n_unclear}" if n_unclear else "")
+        + f"  synapses: {len(rows)}" + ("  |  hand-curated seeds" if curated else ""))
     for r in rows:
         plotting.plot_synapse(
             out / "per_synapse" / f"{name}_IS{r['IS']:02d}.png", stack, bodies, r, voxel,
@@ -155,6 +164,10 @@ def main(argv=None):
                          "excluded.csv instead of the table")
     ap.add_argument("--shell-um", type=float, default=0.5,
                     help="half-thickness of the shell used for the mCherry readout")
+    ap.add_argument("--unclear-gfp", default="",
+                    help="LOW,HIGH band of GFP brightness (in SDs over background) in which a "
+                         "hand-placed cell is called Unclear: it keeps its seed, so the cells "
+                         "around it stay correct, but never forms a synapse")
     ap.add_argument("--curation", default="",
                     help="folder of hand-made {image}.csv seed files (x,y,type). An image with "
                          "one is segmented from those points instead of by nucleus detection; "
@@ -171,10 +184,11 @@ def main(argv=None):
         raise SystemExit("no image matching '{}' in {}".format(a.pattern, a.data_dir))
     channels = tuple(int(c) for c in a.channels.split(","))
     voxel = tuple(float(v) for v in a.voxel.split(",")) if a.voxel else None
+    a.unclear_gfp = tuple(float(v) for v in a.unclear_gfp.split(",")) if a.unclear_gfp else None
     opts = {k: getattr(a, k) for k in
             ("snr", "gfp_fraction", "min_nucleus_fraction", "min_separation_um", "nuclei",
              "nucleus_diameter_um",
-             "expand_um", "min_area_um2", "shell_um", "border", "open_um", "split", "curation", "max_fraction_t")}
+             "expand_um", "min_area_um2", "shell_um", "border", "open_um", "split", "curation", "max_fraction_t", "unclear_gfp")}
 
     rows, excluded = [], []
     for path in files:

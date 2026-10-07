@@ -12,6 +12,11 @@ sits in it.
 
 ![example synapse](docs/example_synapse.png)
 
+> **Three runs are kept side by side**: `results/` is the automatic one, `results_curated/` adds
+> the hand-placed cells and is the primary result, and `results_curated_strict/` additionally
+> leaves out the cells whose GFP is ambiguous, as a sensitivity check. The two comparisons are
+> written up under **Correcting the cells by hand**.
+>
 > **Status.** This is a record of a method that was built and tested, not a finished study. The
 > only images it has been run on (2026-06-04, see below) are replicates of a single condition —
 > the comparison groups were never acquired, and the project ended before they could be. The
@@ -73,6 +78,7 @@ Useful options:
 | `--expand-um` | `0.0` | extra growth of each cell territory; raise to `0.3` if real contacts are missed |
 | `--min-area-um2` | `0.5` | contacts smaller than this are not counted as a synapse |
 | `--max-fraction-t` | `0.5` | a contact covering more than this fraction of the T cell surface is two cells inside one another; those pairs go to `excluded.csv` |
+| `--unclear-gfp` | — | `LOW,HIGH` band of GFP brightness in which a hand-placed cell is typed `Unclear`: it keeps its seed but forms no synapse |
 | `--curation` | — | folder of hand-made `{image}.csv` seed files; see **Correcting the cells by hand** |
 | `--border` | `xy` | drop cells clipped by the sides of the field; `zyx` also drops cells clipped in z, `none` keeps everything |
 | `--metric` | `Contact_Area_um2` | which column is plotted and tested |
@@ -171,8 +177,55 @@ compared and the repository keeps a record of what the program got wrong.
 A hand-placed pair can still be two cells lying inside one another rather than touching.
 `--max-fraction-t` (default 0.5) moves any pair whose contact covers more than that fraction of
 the T cell's **whole** surface into `excluded.csv` instead of the table, with the reason. On this
-set it removed 9 pairs, at 0.54–0.91 of the T cell surface, and the largest contact left is at
-0.39 — the two groups are well separated, so anything between 0.4 and 0.5 gives the same answer.
+set it removes 4 pairs, and they sit well clear of the rest.
+
+### Cells whose GFP is ambiguous
+
+The T cells are NFAT-Jurkats that were **transfected**, not selected, so GFP-negative Jurkats are
+expected in the dish. "No GFP" therefore does not mean "tumour cell", and the call is genuinely
+hard for the dim ones. Measuring every hand-placed cell's GFP in a 3 µm box, in robust SDs over
+the image background:
+
+| GFP SNR | cells | called T by hand | called tumour by hand |
+|---|---|---|---|
+| 0–2 | 56 | 3 | 53 |
+| **2–4** | **28** | **17** | **11** |
+| 4–6 | 85 | 66 | 19 |
+| 6–10 | 147 | 136 | 11 |
+| 10+ | 82 | 78 | 4 |
+
+Outside the 2–4 band the two cell types separate cleanly (medians 7.7 and 1.3). Inside it the
+hand calls are an even split at the same brightness — the image is not deciding it, so neither
+can a person.
+
+`--unclear-gfp 2,4` therefore exists: a cell in that band is typed `Unclear`. It **keeps its
+seed**, so the cells around it still get the right boundaries, but it never forms a synapse.
+Dropping the point instead would let a neighbour absorb its body and spoil *that* cell's contact
+as well.
+
+**On this data it changes nothing measurable**, which is itself the useful result:
+
+| | all hand-placed cells | unclear GFP excluded |
+|---|---|---|
+| synapses | 79 | 66 |
+| cells typed `Unclear` | 0 | 1.3 per image |
+| contact area, median | 44.2 µm² | 46.3 µm² |
+| `Contact_Fraction_T`, median | 0.050 | 0.055 |
+| **mCherry enrichment, median** | **1.20** | **1.19** |
+
+![excluding the ambiguous cells](docs/unclear_gfp.png)
+
+The last row is the test that matters, because mCherry is an **independent** channel: if the
+ambiguous cells were really tumour cells wrongly called T cells, removing them should leave a
+cleaner set of true T–tumour pairs and raise the antigen enrichment at the synapse. It does not
+(Mann-Whitney p = 0.99). The 13 synapses the filter removes also look like the ones it keeps —
+median enrichment 1.21 against 1.19, the same `mCherry_SNR`, areas spread over the same range.
+
+So the filter costs 16 % of the data and buys no measurable accuracy. **The full hand-placed set
+in `results_curated/` is the primary result, and `results_curated_strict/` is the sensitivity
+check** showing the numbers do not rest on the cells that were hard to call. Both are in the
+repository. With a brighter GFP — or a stably selected, sorted T cell line instead of a transient
+transfection — the band would be empty and the question would not arise.
 
 ## The code, in the order it runs
 
@@ -256,7 +309,7 @@ nothing. The *contact area* does not depend on the mCherry level, only on the se
 | `mCherry_IS`, `mCherry_TumourSurface` | background-subtracted antigen in the surface band, at the synapse and elsewhere |
 | `mCherry_Enrichment` | their ratio; > 1 = antigen concentrated at the synapse |
 | `mCherry_Background`, `mCherry_SNR` | staining quality of that image |
-| `N_T_Cells`, `N_Tumour_Cells` | cells kept in that image, i.e. how crowded the field was |
+| `N_T_Cells`, `N_Tumour_Cells`, `N_Unclear_Cells` | cells kept in that image, i.e. how crowded the field was |
 | `Curated` | the two cells came from hand-placed points rather than from automatic detection |
 | `Clipped_Z` | one of the two cells reaches the first or last z plane, so its volume and surface are truncated |
 

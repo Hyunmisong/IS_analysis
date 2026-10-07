@@ -4,7 +4,7 @@ from scipy import ndimage as ndi
 from skimage.filters import gaussian
 from skimage.segmentation import expand_labels, watershed
 
-T_CELL, TUMOUR = "T", "Tumour"
+T_CELL, TUMOUR, UNKNOWN = "T", "Tumour", "Unclear"
 
 
 def smooth(img, voxel, sigma_um):

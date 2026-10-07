@@ -124,7 +124,7 @@ def measure(stack, nuclei, bodies, cores, classes, voxel, min_area_um2=0.5, shel
     found = []
     for (a, b), staircase in contact_pairs(bodies, voxel).items():
         kinds = {classes[a][0]: a, classes[b][0]: b}
-        if len(kinds) != 2:  # T-T or tumour-tumour contact: not a synapse
+        if set(kinds) != {T_CELL, TUMOUR}:  # T-T, tumour-tumour, or an Unclear cell
             continue
         t, tumour = kinds[T_CELL], kinds[TUMOUR]
         sl = _crop(bodies, t, tumour)

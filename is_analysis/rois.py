@@ -14,7 +14,7 @@ import numpy as np
 import roifile
 from skimage.measure import find_contours
 
-from .segmentation import T_CELL
+from .segmentation import T_CELL, UNKNOWN
 
 MIN_VERTICES = 4
 
@@ -26,7 +26,7 @@ def write(path, bodies, synapses, classes):
         path.unlink()  # roiwrite appends, and a stale file would keep old outlines
     rois = []
     for label, (kind, _) in sorted(classes.items()):
-        tag = "T" if kind == T_CELL else "Tumour"
+        tag = {T_CELL: "T", UNKNOWN: "Unclear"}.get(kind, "Tumour")
         rois += _outlines(bodies == label, f"{tag}{label}")
     for index in range(1, int(synapses.max()) + 1):
         rois += _outlines(synapses == index, f"IS{index:02d}")

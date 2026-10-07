@@ -6,9 +6,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from skimage.segmentation import find_boundaries
 
-from .segmentation import T_CELL
+from .segmentation import T_CELL, UNKNOWN
 
-COLOURS = {T_CELL: "#00e5ff", "Tumour": "#ffd400"}
+COLOURS = {T_CELL: "#00e5ff", "Tumour": "#ffd400", UNKNOWN: "#9aa0a6"}
 
 
 def rgb(stack, gamma=0.6):

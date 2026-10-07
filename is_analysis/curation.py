@@ -21,11 +21,13 @@ from pathlib import Path
 import numpy as np
 from scipy import ndimage as ndi
 
-from .segmentation import T_CELL, TUMOUR, ball, smooth
+from .segmentation import T_CELL, TUMOUR, UNKNOWN, background, ball, smooth
 
 SEED_RADIUS_UM = 1.5
 KINDS = {"t": T_CELL, "tcell": T_CELL, "t_cell": T_CELL,
-         "tumour": TUMOUR, "tumor": TUMOUR}
+         "tumour": TUMOUR, "tumor": TUMOUR,
+         "unclear": UNKNOWN, "unknown": UNKNOWN, "?": UNKNOWN}
+SNR_BOX_UM = 3.0
 
 
 def file_for(directory, image_name):
@@ -89,3 +91,41 @@ def write_points(path, nuclei, classes):
             if np.isnan(row):
                 continue
             writer.writerow([int(round(col)), int(round(row)), classes[label][0]])
+
+
+def gfp_snr(points, dapi, gfp, voxel, box_um=SNR_BOX_UM):
+    """GFP brightness of each hand-placed cell, in robust SDs above the image background.
+
+    Measured in a `box_um` box at the brightest plane of the cell's own DAPI column - the same
+    place the seed goes - so it answers "how green is this cell" without depending on a body
+    having been grown for it yet.
+    """
+    smoothed = smooth(gfp, voxel, 0.5)
+    bg, sd = background(gfp)
+    profile = smooth(dapi, voxel, 1.0)
+    half = [max(1, int(round(box_um / v))) for v in voxel]
+    out = []
+    for x, y, _ in points:
+        col, row = int(round(x)), int(round(y))
+        plane = int(np.argmax(profile[:, row, col]))
+        box = smoothed[max(plane - half[0], 0):plane + half[0] + 1,
+                       max(row - half[1], 0):row + half[1] + 1,
+                       max(col - half[2], 0):col + half[2] + 1]
+        out.append((float(box.mean()) - bg) / sd if sd else float("nan"))
+    return out
+
+
+def mark_unclear(points, snrs, low, high):
+    """Set the type to Unclear where the GFP brightness falls in the [low, high) band.
+
+    In that band the hand calls are about half T cell and half tumour cell at the same
+    brightness, so the image is not deciding it. Such a cell keeps its point - without a seed its
+    body would be absorbed by a neighbour and spoil *that* cell's boundary too - but it never
+    forms a synapse.
+    """
+    marked = []
+    for (x, y, kind), snr in zip(points, snrs):
+        if low <= snr < high:
+            kind = UNKNOWN
+        marked.append((x, y, kind))
+    return marked
