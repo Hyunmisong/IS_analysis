@@ -22,8 +22,9 @@
 // The number drawn on a circle is the name of its row, so the two always point at the same
 // cell - including after deletions, which leave gaps in the numbering rather than shifting it.
 //
-// The plane does not matter: click anywhere on the cell, on whichever plane you like. Each
-// marker is placed at the plane where its own DAPI column is brightest.
+// The plane does not matter: click anywhere on the cell, on whichever plane you like, and the
+// markers stay visible as you scroll through z. Each one is placed at the plane where its own
+// DAPI column is brightest.
 //
 // Each image is saved as soon as its two rounds are done, so stopping half way loses nothing:
 // leave "skip images already corrected" ticked next time and carry on where you left off.
@@ -62,6 +63,10 @@ if (todo.length == 0)
     exit("Nothing to do in " + imageDir + "\n(filter \"" + filter + "\", and the skip options).");
 
 run("ROI Manager...");
+// ROIs are otherwise tied to the plane they were made on and vanish as soon as you scroll in z
+roiManager("Associate", "false");
+roiManager("Centered", "false");
+roiManager("UseNames", "true");
 run("Labels...", "color=white font=18 show use draw");
 
 for (n = 0; n < todo.length; n++) {
@@ -136,6 +141,7 @@ function editRound(id, xs, ys, where, what, colour) {
     roiManager("reset");
     for (i = 0; i < xs.length; i++) {
         makeOval(xs[i] - markerPx / 2, ys[i] - markerPx / 2, markerPx, markerPx);
+        Roi.setPosition(0);          // 0 = every plane, not just the one in view
         roiManager("add");
     }
     if (roiManager("count") > 0) {
@@ -165,8 +171,10 @@ function editRound(id, xs, ys, where, what, colour) {
         + "OK = done with the " + what + ".   Cancel = stop (finished images are saved).");
 
     // a cell clicked but not yet committed with 't' - take it rather than lose it
-    if (selectionType() == 10 && roiManager("index") == -1)
+    if (selectionType() == 10 && roiManager("index") == -1) {
+        Roi.setPosition(0);
         roiManager("add");
+    }
 
     keptX = newArray(0); keptY = newArray(0);
     for (i = 0; i < roiManager("count"); i++) {
