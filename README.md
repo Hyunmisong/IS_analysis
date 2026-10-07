@@ -120,9 +120,12 @@ What a person can still do is look at the DAPI and say "that is one cell, and it
 cell". So the seeds, and only the seeds, are placed by hand: **one point per cell, plus what kind
 of cell it is.** Everything else stays automatic and identical between the two runs.
 
-![automatic versus hand-placed cells](docs/auto_vs_curated.png)
+![automatic versus hand-placed cells](docs/auto_vs_curated/6_stack2-5.png)
 
-This is `6_stack2-5`, the image where the two differ most. The automatic run called six of the
+This is `6_stack2-5`, the image where the two differ most. The same comparison for every image
+is in [`docs/auto_vs_curated/`](docs/auto_vs_curated), with the counts side by side in
+[`summary.csv`](docs/auto_vs_curated/summary.csv); rebuild them with
+`python scripts/compare_runs.py`. The automatic run called six of the
 blue DAPI-only cells T cells, because they have no detectable mCherry, so every contact they
 make was a T–T pair and was discarded: **1 synapse instead of 6**. Over the whole set, hand
 placement takes 60 synapses to 83 while the number of cells barely moves (T 15.6 → 15.1,
