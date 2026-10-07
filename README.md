@@ -155,6 +155,12 @@ python scripts/run_analysis.py --data-dir data/raw
 python scripts/run_analysis.py --data-dir data/raw --curation curation --out results_curated
 ```
 
+To go over your own work again, run the macro with **"skip images already corrected" unticked**.
+An image that already has a file in `curation/` then starts from *those* cells rather than from
+the automatic ones, so a second pass edits what you did last time. Each file is only rewritten
+once both of its rounds are finished, so cancelling in the middle leaves the previous version
+untouched.
+
 An image with no file in `curation/` is detected automatically as before, so the two can be
 mixed; the `Curated` column of the table says which rows came from hand-placed points. Keeping
 the output in `results_curated/` leaves the automatic run in `results/` intact, so the two can be
